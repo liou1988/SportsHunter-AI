@@ -4,8 +4,8 @@ SportsHunter-AI is a professional sports match prediction system built with
 FastAPI, SQLAlchemy, Alembic, APScheduler, Provider-based data collection,
 rule-based Hunter Rating, Risk, Signal, Evaluation, and Automation engines.
 
-Beta v1 requires **Python >=3.12** and defaults to the free ESPN public football
-provider.
+Beta v1.0.1 requires **Python >=3.12** and defaults to the free ESPN public
+football provider.
 
 ## Docker one-command deploy
 

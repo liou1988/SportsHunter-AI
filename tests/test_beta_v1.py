@@ -19,6 +19,34 @@ def test_settings_accept_empty_football_season() -> None:
     assert settings.football_data_season == 2026
 
 
+def test_settings_parse_single_enabled_sport_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLED_SPORTS", "football")
+    settings = Settings(_env_file=None)
+    assert settings.enabled_sports == ["football"]
+
+
+def test_settings_parse_csv_enabled_sports_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLED_SPORTS", "football,basketball,tennis")
+    settings = Settings(_env_file=None)
+    assert settings.enabled_sports == ["football", "basketball", "tennis"]
+
+
+def test_settings_parse_json_enabled_sports_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLED_SPORTS", '["football","basketball"]')
+    settings = Settings(_env_file=None)
+    assert settings.enabled_sports == ["football", "basketball"]
+
+
+def test_settings_parse_empty_optional_int_bool_and_float_env(monkeypatch) -> None:
+    monkeypatch.setenv("FOOTBALL_DATA_SEASON", "")
+    monkeypatch.setenv("ENABLE_SCHEDULER", "off")
+    monkeypatch.setenv("PROVIDER_TIMEOUT_SECONDS", "2.5")
+    settings = Settings(_env_file=None)
+    assert settings.football_data_season == 2026
+    assert settings.enable_scheduler is False
+    assert settings.provider_timeout_seconds == 2.5
+
+
 def test_env_example_defaults_to_free_provider() -> None:
     text = Path(".env.example").read_text(encoding="utf-8")
     assert "DATA_PROVIDER=free" in text

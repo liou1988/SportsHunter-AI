@@ -1,11 +1,98 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_core import PydanticUndefined
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+
+_UNHANDLED = object()
+
+
+def _is_optional(annotation: Any) -> bool:
+    origin = get_origin(annotation)
+    return origin in {Union, UnionType} and type(None) in get_args(annotation)
+
+
+def _strip_optional(annotation: Any) -> Any:
+    if not _is_optional(annotation):
+        return annotation
+    return next(arg for arg in get_args(annotation) if arg is not type(None))
+
+
+def _field_default(field: Any) -> Any:
+    default_factory = getattr(field, "default_factory", None)
+    if default_factory is not None:
+        return default_factory()
+    default = getattr(field, "default", PydanticUndefined)
+    if default is not PydanticUndefined:
+        return default
+    return None
+
+
+def _coerce_env_value(field: Any, value: str) -> Any:
+    annotation = field.annotation
+    bare_annotation = _strip_optional(annotation)
+    origin = get_origin(bare_annotation)
+
+    if origin is list and get_args(bare_annotation) in {(str,), ()}:
+        normalized = value.strip()
+        if normalized == "":
+            return _field_default(field)
+        if normalized.startswith("["):
+            loaded = json.loads(normalized)
+            return [str(item).strip() for item in loaded if str(item).strip()]
+        return [item.strip() for item in normalized.split(",") if item.strip()]
+
+    if value == "":
+        if _is_optional(annotation):
+            return _field_default(field)
+        if bare_annotation in {bool, int, float}:
+            return _field_default(field)
+
+    if bare_annotation is bool:
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "f", "no", "n", "off"}:
+            return False
+
+    if bare_annotation is int:
+        return int(value)
+
+    if bare_annotation is float:
+        return float(value)
+
+    return _UNHANDLED
+
+
+class SportsHunterEnvSettingsSource(EnvSettingsSource):
+    def prepare_field_value(self, field_name: str, field: Any, value: Any, value_is_complex: bool) -> Any:
+        if isinstance(value, str):
+            coerced = _coerce_env_value(field, value)
+            if coerced is not _UNHANDLED:
+                return coerced
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
+
+
+class SportsHunterDotEnvSettingsSource(DotEnvSettingsSource):
+    def prepare_field_value(self, field_name: str, field: Any, value: Any, value_is_complex: bool) -> Any:
+        if isinstance(value, str):
+            coerced = _coerce_env_value(field, value)
+            if coerced is not _UNHANDLED:
+                return coerced
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
 
 
 class Settings(BaseSettings):
@@ -54,6 +141,43 @@ class Settings(BaseSettings):
     reports_dir: Path = Path("reports")
     system_status_path: Path = Path("system_status.md")
     validation_report_path: Path = Path("validation_report.md")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            SportsHunterEnvSettingsSource(
+                settings_cls,
+                case_sensitive=getattr(env_settings, "case_sensitive", None),
+                env_prefix=getattr(env_settings, "env_prefix", None),
+                env_nested_delimiter=getattr(env_settings, "env_nested_delimiter", None),
+                env_nested_max_split=getattr(env_settings, "env_nested_max_split", None),
+                env_ignore_empty=getattr(env_settings, "env_ignore_empty", None),
+                env_parse_none_str=getattr(env_settings, "env_parse_none_str", None),
+                env_parse_enums=getattr(env_settings, "env_parse_enums", None),
+            ),
+            SportsHunterDotEnvSettingsSource(
+                settings_cls,
+                env_file=getattr(dotenv_settings, "env_file", None),
+                env_file_encoding=getattr(dotenv_settings, "env_file_encoding", None),
+                dotenv_filtering=getattr(dotenv_settings, "dotenv_filtering", None),
+                case_sensitive=getattr(dotenv_settings, "case_sensitive", None),
+                env_prefix=getattr(dotenv_settings, "env_prefix", None),
+                env_nested_delimiter=getattr(dotenv_settings, "env_nested_delimiter", None),
+                env_nested_max_split=getattr(dotenv_settings, "env_nested_max_split", None),
+                env_ignore_empty=getattr(dotenv_settings, "env_ignore_empty", None),
+                env_parse_none_str=getattr(dotenv_settings, "env_parse_none_str", None),
+                env_parse_enums=getattr(dotenv_settings, "env_parse_enums", None),
+            ),
+            file_secret_settings,
+        )
 
     @field_validator("enabled_sports", "free_provider_football_leagues", mode="before")
     @classmethod

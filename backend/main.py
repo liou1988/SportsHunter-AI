@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0-beta.1",
+    version="1.0.1-beta.1",
     description="SportsHunter-AI professional sports prediction API.",
     lifespan=lifespan,
 )
