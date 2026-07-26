@@ -11,7 +11,7 @@ from config.settings import get_settings
 from collector.history import HistoricalCollector
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
-from telegram_bot.recommendations import RecommendationTelegramPusher
+from telegram_bot.alerts import RecommendationAlertPusher
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,9 @@ class AutomationRunner:
         self.scheduler.add_job(self.sync.sync_today, **AUTOMATION_JOBS["sync_today"], id="sync_today", replace_existing=True)
         self.scheduler.add_job(self.sync.update_odds, **AUTOMATION_JOBS["update_odds"], id="update_odds", replace_existing=True)
         self.scheduler.add_job(
-            self._push_telegram_recommendations,
-            **AUTOMATION_JOBS["telegram_daily_recommendations"],
-            id="telegram_daily_recommendations",
+            self._push_telegram_recommendation_alerts,
+            **AUTOMATION_JOBS["telegram_recommendation_alerts"],
+            id="telegram_recommendation_alerts",
             replace_existing=True,
         )
         self.scheduler.add_job(self.sync.sync_live, **AUTOMATION_JOBS["refresh_live"], id="refresh_live", replace_existing=True)
@@ -58,5 +58,5 @@ class AutomationRunner:
         return scheduler
 
     @staticmethod
-    def _push_telegram_recommendations() -> dict:
-        return asyncio.run(RecommendationTelegramPusher().push_today()).to_dict()
+    def _push_telegram_recommendation_alerts() -> dict:
+        return asyncio.run(RecommendationAlertPusher().push_new()).to_dict()

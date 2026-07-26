@@ -6,7 +6,7 @@ import asyncio
 from automation.health import SystemHealthCheck
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
-from telegram_bot.recommendations import RecommendationTelegramPusher
+from telegram_bot.alerts import RecommendationAlertPusher
 
 
 def sync_today() -> dict:
@@ -29,8 +29,8 @@ def daily_report() -> str:
     return EvaluationRunner().daily().to_markdown()
 
 
-def telegram_daily_recommendations() -> dict:
-    return asyncio.run(RecommendationTelegramPusher().push_today()).to_dict()
+def telegram_recommendation_alerts() -> dict:
+    return asyncio.run(RecommendationAlertPusher().push_new()).to_dict()
 
 
 def system_status() -> str:

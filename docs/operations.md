@@ -13,6 +13,7 @@ Useful endpoints:
 - `GET /api/provider/debug`
 - `GET /api/matches/today`
 - `GET /api/predictions/today`
+- `POST /api/telegram/alerts/check`
 - `GET /dashboard`
 
 Generated runtime files such as SQLite databases, logs, reports and validation

@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 
-from telegram_bot.recommendations import RecommendationTelegramPusher
+from telegram_bot.alerts import RecommendationAlertPusher
 
 
 async def main() -> None:
-    result = await RecommendationTelegramPusher().push_today()
+    result = await RecommendationAlertPusher().push_new()
     print(json.dumps(result.to_dict(), ensure_ascii=False))
 
 

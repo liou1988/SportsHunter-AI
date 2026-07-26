@@ -66,6 +66,24 @@ Provider diagnostics:
 - `GET /api/provider/debug` shows checked sources, league counts, skipped ESPN
   slugs, raw fixture count and parsed fixture count.
 
+## Telegram alerts
+
+Telegram recommendations are event-style alerts now: SportsHunter-AI checks the
+prediction pipeline every few minutes and sends a message only when a new
+qualified match appears. There is no fixed daily recommendation push.
+
+```env
+TELEGRAM_PUSH_ENABLED=true
+TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY
+TELEGRAM_ALERT_INTERVAL_MINUTES=5
+```
+
+Manual alert check:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/telegram/alerts/check | python3 -m json.tool
+```
+
 ## Directories
 
 ```text

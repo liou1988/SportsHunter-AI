@@ -20,11 +20,16 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_PUSH_ENABLED: ${TELEGRAM_PUSH_ENABLED:-false}
+      TELEGRAM_ALERT_SIGNALS: ${TELEGRAM_ALERT_SIGNALS:-STRONG_BUY,BUY}
+      TELEGRAM_ALERT_INTERVAL_MINUTES: ${TELEGRAM_ALERT_INTERVAL_MINUTES:-5}
+      TELEGRAM_ALERT_RETENTION_DAYS: ${TELEGRAM_ALERT_RETENTION_DAYS:-7}
+      TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}
     ports:
       - "8000:8000"
     volumes:
       - sportshunter_data:/app/data
       - ./logs:/app/logs
+      - ./reports:/app/reports
     restart: unless-stopped
 
   telegram_bot:
@@ -50,10 +55,15 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_PUSH_ENABLED: ${TELEGRAM_PUSH_ENABLED:-false}
+      TELEGRAM_ALERT_SIGNALS: ${TELEGRAM_ALERT_SIGNALS:-STRONG_BUY,BUY}
+      TELEGRAM_ALERT_INTERVAL_MINUTES: ${TELEGRAM_ALERT_INTERVAL_MINUTES:-5}
+      TELEGRAM_ALERT_RETENTION_DAYS: ${TELEGRAM_ALERT_RETENTION_DAYS:-7}
+      TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}
     command: ["python", "-m", "telegram_bot.bot"]
     volumes:
       - sportshunter_data:/app/data
       - ./logs:/app/logs
+      - ./reports:/app/reports
     restart: unless-stopped
 
 volumes:

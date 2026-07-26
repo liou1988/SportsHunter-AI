@@ -26,6 +26,7 @@ from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
 from scheduler import jobs
 from scheduler.runner import create_scheduler
+from telegram_bot.alerts import AlertArchive, RecommendationAlertPusher, format_recommendation_alert_message
 from telegram_bot.fixtures import format_fixtures_message
 from telegram_bot.localization import translate_match_text, translate_team_name
 from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
@@ -79,6 +80,12 @@ def test_settings_parse_free_provider_sources(monkeypatch) -> None:
     monkeypatch.setenv("FREE_PROVIDER_SOURCES", "espn,thesportsdb")
     settings = Settings(_env_file=None)
     assert settings.free_provider_sources == ["espn", "thesportsdb"]
+
+
+def test_settings_parse_telegram_alert_signals(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_ALERT_SIGNALS", "STRONG_BUY,BUY,WATCH")
+    settings = Settings(_env_file=None)
+    assert settings.telegram_alert_signals == ["STRONG_BUY", "BUY", "WATCH"]
 
 
 def test_env_example_defaults_to_free_provider() -> None:
@@ -150,6 +157,17 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}" in text
     assert "TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}" in text
     assert "TELEGRAM_PUSH_ENABLED: ${TELEGRAM_PUSH_ENABLED:-false}" in text
+    assert "TELEGRAM_ALERT_SIGNALS: ${TELEGRAM_ALERT_SIGNALS:-STRONG_BUY,BUY}" in text
+    assert "TELEGRAM_ALERT_INTERVAL_MINUTES: ${TELEGRAM_ALERT_INTERVAL_MINUTES:-5}" in text
+    assert "TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}" in text
+
+
+def test_env_example_contains_triggered_alert_settings() -> None:
+    text = Path(".env.example").read_text(encoding="utf-8")
+    assert "TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY" in text
+    assert "TELEGRAM_ALERT_INTERVAL_MINUTES=5" in text
+    assert "TELEGRAM_ALERT_RETENTION_DAYS=7" in text
+    assert "TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json" in text
 
 
 def test_docker_compose_allows_free_provider_leagues_env_override() -> None:
@@ -484,20 +502,111 @@ def test_telegram_today_recommendations_api_pushes_recommendations(monkeypatch) 
     assert "信号：强烈推荐" in sent_messages[0]
 
 
-def test_scheduler_registers_telegram_daily_job() -> None:
+def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None:
+    import asyncio
+
+    sent_messages: list[str] = []
+
+    class FakeNotifier:
+        async def send_message_with_result(self, text: str) -> TelegramSendResult:
+            sent_messages.append(text)
+            return TelegramSendResult(success=True, sent=True, message_id=len(sent_messages))
+
+    settings = Settings(
+        data_provider="mock",
+        telegram_alert_signals=["STRONG_BUY", "BUY"],
+        telegram_alert_archive_path=tmp_path / "alerts.json",
+        _env_file=None,
+    )
+    pusher = RecommendationAlertPusher(
+        pipeline=_fake_recommendation_pipeline(),
+        notifier=FakeNotifier(),
+        archive=AlertArchive(settings.telegram_alert_archive_path),
+        settings=settings,
+    )
+
+    first = asyncio.run(pusher.push_new())
+    second = asyncio.run(pusher.push_new())
+
+    assert first.success is True
+    assert first.sent is True
+    assert first.evaluated_count == 3
+    assert first.eligible_count == 2
+    assert first.pushed_count == 2
+    assert second.success is True
+    assert second.sent is False
+    assert second.pushed_count == 0
+    assert second.skipped_count == 2
+    assert len(sent_messages) == 2
+    assert all("SportsHunter AI 发现合适比赛" in message for message in sent_messages)
+
+
+def test_telegram_alert_message_formats_single_prediction() -> None:
+    pipeline = _fake_recommendation_pipeline()
+    result = pipeline.run_today()[0]
+    message = format_recommendation_alert_message(pipeline, result)
+    assert "SportsHunter AI 发现合适比赛" in message
+    assert "信号：推荐" in message
+    assert "仓位：1.5U" in message
+    assert "赔率：DebugBook" in message
+
+
+def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_path) -> None:
+    sent_messages: list[str] = []
+
+    class FakeNotifier:
+        async def send_message_with_result(self, text: str) -> TelegramSendResult:
+            sent_messages.append(text)
+            return TelegramSendResult(success=True, sent=True, message_id=len(sent_messages))
+
+    class FakePusher:
+        def __init__(self, pipeline, notifier) -> None:
+            self.pusher = RecommendationAlertPusher(
+                pipeline=pipeline,
+                notifier=FakeNotifier(),
+                archive=AlertArchive(tmp_path / "api-alerts.json"),
+                settings=Settings(
+                    data_provider="mock",
+                    telegram_alert_signals=["STRONG_BUY", "BUY"],
+                    telegram_alert_archive_path=tmp_path / "api-alerts.json",
+                    _env_file=None,
+                ),
+            )
+
+        async def push_new(self):
+            return await self.pusher.push_new()
+
+    monkeypatch.setattr(telegram_router, "RecommendationAlertPusher", FakePusher)
+    app.dependency_overrides[telegram_router.get_prediction_pipeline] = lambda: _fake_recommendation_pipeline()
+    try:
+        response = TestClient(app).post("/api/telegram/alerts/check")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["sent"] is True
+    assert payload["pushed_count"] == 2
+    assert len(sent_messages) == 2
+
+
+def test_scheduler_registers_triggered_telegram_alert_job() -> None:
     scheduler = create_scheduler()
-    assert "telegram_daily_recommendations" in {job.id for job in scheduler.get_jobs()}
+    job_ids = {job.id for job in scheduler.get_jobs()}
+    assert "telegram_recommendation_alerts" in job_ids
+    assert "telegram_daily_recommendations" not in job_ids
     if scheduler.running:
         scheduler.shutdown(wait=False)
 
 
-def test_telegram_daily_job_returns_push_result(monkeypatch) -> None:
+def test_telegram_alert_job_returns_push_result(monkeypatch) -> None:
     class FakePusher:
-        async def push_today(self):
-            return SimpleNamespace(to_dict=lambda: {"sent": True, "count": 1, "message": "ok"})
+        async def push_new(self):
+            return SimpleNamespace(to_dict=lambda: {"sent": True, "pushed_count": 1, "message": "ok"})
 
-    monkeypatch.setattr(jobs, "RecommendationTelegramPusher", FakePusher)
-    assert jobs.telegram_daily_recommendations() == {"sent": True, "count": 1, "message": "ok"}
+    monkeypatch.setattr(jobs, "RecommendationAlertPusher", FakePusher)
+    assert jobs.telegram_recommendation_alerts() == {"sent": True, "pushed_count": 1, "message": "ok"}
 
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
@@ -930,7 +1039,7 @@ def _fake_recommendation_pipeline():
 def _fake_prediction_result(fixture: Fixture, score: float, signal: str, stake: float):
     return SimpleNamespace(
         fixture=fixture,
-        hunter_score=SimpleNamespace(score=score, confidence=0.91),
+        hunter_score=SimpleNamespace(score=score, confidence=0.91, grade="★★★★☆"),
         signal=SimpleNamespace(signal=SimpleNamespace(value=signal), stake=stake, reason=f"{signal} reason"),
         predicted_side=fixture.home_team.name if stake else None,
     )

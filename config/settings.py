@@ -273,6 +273,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_push_enabled: bool = False
+    telegram_alert_signals: list[str] = Field(default_factory=lambda: ["STRONG_BUY", "BUY"])
+    telegram_alert_interval_minutes: int = 5
+    telegram_alert_retention_days: int = 7
+    telegram_alert_archive_path: Path = Path("reports/telegram_alerts.json")
 
     history_collection_enabled: bool = True
     evaluation_enabled: bool = True
@@ -318,7 +322,7 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
-    @field_validator("enabled_sports", "free_provider_sources", "free_provider_football_leagues", mode="before")
+    @field_validator("enabled_sports", "free_provider_sources", "free_provider_football_leagues", "telegram_alert_signals", mode="before")
     @classmethod
     def parse_csv_list(cls, value: Any) -> list[str]:
         if value is None or value == "":
