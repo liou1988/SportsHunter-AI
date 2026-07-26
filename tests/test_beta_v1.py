@@ -11,9 +11,12 @@ from config.settings import Settings
 from database.base import Base
 from database.models import OddsSnapshot
 from database.repositories import SportsRepository
+from datahub.hub import DataHub
 from datahub.providers.mock import MockProvider
 from data_sync.models import SyncSummary
 from core.risk.models import RiskBreakdown, RiskReason
+from free_provider.football import FreeFootballProvider
+from api.routers import provider as provider_router
 from scheduler import jobs
 
 
@@ -88,6 +91,89 @@ def test_api_health() -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["app"] == "SportsHunter-AI"
+
+
+def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
+    app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))
+    try:
+        client = TestClient(app)
+        response = client.get("/api/provider/debug")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "mock"
+    assert payload["request_url"] == "mock://today"
+    assert payload["http_status"] == 200
+    assert payload["fixtures_raw"] == 1
+    assert payload["fixtures_parsed"] == 1
+    assert payload["first_fixture"]["id"] == "mock-001"
+    assert payload["errors"] == []
+
+
+def test_free_provider_debug_parses_raw_scoreboard(monkeypatch) -> None:
+    payload = {
+        "leagues": [{"name": "English Premier League"}],
+        "events": [
+            {
+                "id": "401",
+                "date": "2026-07-26T12:00:00Z",
+                "season": {"slug": "regular-season"},
+                "competitions": [
+                    {
+                        "venue": {"fullName": "Debug Stadium"},
+                        "status": {
+                            "type": {"state": "pre", "name": "STATUS_SCHEDULED", "detail": "Scheduled"},
+                            "displayClock": "",
+                        },
+                        "competitors": [
+                            {
+                                "homeAway": "home",
+                                "score": "0",
+                                "team": {"id": "1", "displayName": "Debug Home", "abbreviation": "DHM"},
+                            },
+                            {
+                                "homeAway": "away",
+                                "score": "0",
+                                "team": {"id": "2", "displayName": "Debug Away", "abbreviation": "DAW"},
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    class FakeResponse:
+        status_code = 200
+        url = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=20260726"
+
+        def json(self) -> dict:
+            return payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, *args, **kwargs) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr("free_provider.football.httpx.Client", FakeClient)
+    settings = Settings(data_provider="free", free_provider_football_leagues=["eng.1"], _env_file=None)
+    debug = FreeFootballProvider(settings).debug_today()
+    assert debug["provider"] == "free"
+    assert debug["http_status"] == 200
+    assert debug["fixtures_raw"] == 1
+    assert debug["fixtures_parsed"] == 1
+    assert debug["first_fixture"]["home_team"]["name"] == "Debug Home"
+    assert debug["errors"] == []
 
 
 def test_refresh_live_job_serializes_slots_dataclass(monkeypatch) -> None:

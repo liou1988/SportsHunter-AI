@@ -4,9 +4,11 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import httpx
+
 from config.settings import Settings
 from datahub.http_client import HttpJsonClient
-from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Statistics, Team
+from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Statistics, Team, to_plain_dict
 from datahub.provider import BaseProvider, ProviderUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,49 @@ class FreeFootballProvider(BaseProvider):
 
     def get_today_fixtures(self) -> list[Fixture]:
         return self.cached("free:today", self._get_today_fixtures, ttl_seconds=120)
+
+    def debug_today(self) -> dict:
+        tz = ZoneInfo(self.settings.timezone)
+        today = datetime.now(tz).strftime("%Y%m%d")
+        league_id = next(iter(self.settings.free_provider_football_leagues), "eng.1")
+        path = f"/apis/site/v2/sports/soccer/{league_id}/scoreboard"
+        request_url = f"{self.settings.free_provider_base_url.rstrip('/')}{path}?dates={today}"
+        errors: list[str] = []
+        http_status: int | None = None
+        fixtures_raw = 0
+        fixtures_parsed = 0
+        first_fixture: dict = {}
+
+        try:
+            with httpx.Client(timeout=self.settings.provider_timeout_seconds, follow_redirects=True) as client:
+                response = client.get(
+                    f"{self.settings.free_provider_base_url.rstrip('/')}{path}",
+                    params={"dates": today},
+                )
+                request_url = str(response.url)
+                http_status = response.status_code
+                payload = response.json()
+            events = payload.get("events", []) or []
+            fixtures_raw = len(events)
+            parsed = self._parse_scoreboard(league_id, payload)
+            fixtures_parsed = len(parsed)
+            first_fixture = to_plain_dict(parsed[0]) if parsed else {}
+        except Exception as exc:  # noqa: BLE001 - debug endpoint must report provider failures
+            logger.error("free provider debug request failed", extra={"league": league_id}, exc_info=exc)
+            errors.append(str(exc))
+
+        return {
+            "provider": self.name,
+            "source": self.settings.football_data_source,
+            "timezone": self.settings.timezone,
+            "today": today,
+            "request_url": request_url,
+            "http_status": http_status,
+            "fixtures_raw": fixtures_raw,
+            "fixtures_parsed": fixtures_parsed,
+            "first_fixture": first_fixture,
+            "errors": errors,
+        }
 
     def _get_today_fixtures(self) -> list[Fixture]:
         tz = ZoneInfo(self.settings.timezone)

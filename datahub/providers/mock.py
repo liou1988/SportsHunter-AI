@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from config.settings import Settings
-from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Statistics, Team
+from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Statistics, Team, to_plain_dict
 from datahub.provider import BaseProvider
 
 
@@ -32,6 +32,21 @@ class MockProvider(BaseProvider):
 
     def get_today_fixtures(self) -> list[Fixture]:
         return [self._fixture()]
+
+    def debug_today(self) -> dict:
+        fixtures = self.get_today_fixtures()
+        return {
+            "provider": self.name,
+            "source": self.settings.football_data_source,
+            "timezone": self.settings.timezone,
+            "today": datetime.now(timezone.utc).strftime("%Y%m%d"),
+            "request_url": "mock://today",
+            "http_status": 200,
+            "fixtures_raw": len(fixtures),
+            "fixtures_parsed": len(fixtures),
+            "first_fixture": to_plain_dict(fixtures[0]) if fixtures else {},
+            "errors": [],
+        }
 
     def get_fixture(self, fixture_id: str) -> Fixture:
         return self._fixture(fixture_id)
