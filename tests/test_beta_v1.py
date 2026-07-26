@@ -21,7 +21,10 @@ from core.risk.models import RiskBreakdown, RiskReason
 from free_provider.football import FreeFootballProvider
 from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
+from api.routers import telegram as telegram_router
 from scheduler import jobs
+from scheduler.runner import create_scheduler
+from telegram_bot.recommendations import format_recommendations_message
 
 
 def test_settings_accept_empty_football_season() -> None:
@@ -55,6 +58,16 @@ def test_settings_parse_empty_optional_int_bool_and_float_env(monkeypatch) -> No
     assert settings.football_data_season == 2026
     assert settings.enable_scheduler is False
     assert settings.provider_timeout_seconds == 2.5
+
+
+def test_settings_parse_telegram_env_aliases(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_ENABLED", "true")
+    monkeypatch.setenv("BOT_TOKEN", "token-value")
+    monkeypatch.setenv("CHAT_ID", "chat-value")
+    settings = Settings(_env_file=None)
+    assert settings.telegram_is_enabled is True
+    assert settings.telegram_effective_bot_token == "token-value"
+    assert settings.telegram_effective_chat_id == "chat-value"
 
 
 def test_env_example_defaults_to_free_provider() -> None:
@@ -126,6 +139,64 @@ def test_recommendations_today_can_include_pass() -> None:
     payload = response.json()
     assert payload["count"] == 3
     assert [item["signal"] for item in payload["items"]] == ["STRONG_BUY", "BUY", "PASS"]
+
+
+def test_telegram_message_for_empty_recommendations() -> None:
+    message = format_recommendations_message({"count": 0, "items": []})
+    assert "SportsHunter AI 今日推荐" in message
+    assert "今日没有符合条件的推荐。" in message
+
+
+def test_telegram_message_formats_recommendations() -> None:
+    message = format_recommendations_message(
+        {
+            "count": 1,
+            "items": [
+                {
+                    "league": "Debug League",
+                    "match": "Debug Home vs Debug Away",
+                    "kickoff": "2026-07-26T12:00:00+00:00",
+                    "hunter_score": 91.0,
+                    "confidence": 0.91,
+                    "signal": "BUY",
+                    "predicted_side": "Debug Home",
+                    "stake": "2U",
+                    "reason": "Debug reason",
+                    "odds": {},
+                }
+            ],
+        }
+    )
+    assert "Debug Home vs Debug Away" in message
+    assert "信号: BUY" in message
+    assert "仓位: 2U" in message
+
+
+def test_telegram_test_api_sends_test_message(monkeypatch) -> None:
+    class FakePusher:
+        async def send_test_message(self):
+            return SimpleNamespace(to_dict=lambda: {"sent": True, "count": 0, "message": "SportsHunter AI 测试消息"})
+
+    monkeypatch.setattr(telegram_router, "RecommendationTelegramPusher", FakePusher)
+    response = TestClient(app).post("/api/telegram/test")
+    assert response.status_code == 200
+    assert response.json() == {"sent": True, "count": 0, "message": "SportsHunter AI 测试消息"}
+
+
+def test_scheduler_registers_telegram_daily_job() -> None:
+    scheduler = create_scheduler()
+    assert "telegram_daily_recommendations" in {job.id for job in scheduler.get_jobs()}
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+
+
+def test_telegram_daily_job_returns_push_result(monkeypatch) -> None:
+    class FakePusher:
+        async def push_today(self):
+            return SimpleNamespace(to_dict=lambda: {"sent": True, "count": 1, "message": "ok"})
+
+    monkeypatch.setattr(jobs, "RecommendationTelegramPusher", FakePusher)
+    assert jobs.telegram_daily_recommendations() == {"sent": True, "count": 1, "message": "ok"}
 
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:

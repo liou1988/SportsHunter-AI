@@ -14,12 +14,20 @@ class TelegramNotifier:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
+    async def send_message(self, text: str) -> bool:
+        if not self.settings.telegram_is_enabled:
+            logger.info("telegram is disabled")
+            return False
+        bot_token = self.settings.telegram_effective_bot_token
+        chat_id = self.settings.telegram_effective_chat_id
+        if not bot_token or not chat_id:
+            logger.warning("telegram enabled but token/chat id is missing")
+            return False
+        bot = Bot(bot_token)
+        await bot.send_message(chat_id=chat_id, text=text)
+        return True
+
     async def send_prediction(self, result: PredictionResult) -> bool:
-        if not self.settings.telegram_push_enabled:
-            return False
-        if not self.settings.telegram_bot_token or not self.settings.telegram_chat_id:
-            logger.warning("telegram push enabled but token/chat id is missing")
-            return False
         text = (
             f"SportsHunter-AI {result.signal.signal.value}\n"
             f"{result.fixture.home_team.name} vs {result.fixture.away_team.name}\n"
@@ -27,6 +35,4 @@ class TelegramNotifier:
             f"Risk: {result.risk.level.value} ({result.risk.score})\n"
             f"{result.signal.reason}"
         )
-        bot = Bot(self.settings.telegram_bot_token)
-        await bot.send_message(chat_id=self.settings.telegram_chat_id, text=text)
-        return True
+        return await self.send_message(text)

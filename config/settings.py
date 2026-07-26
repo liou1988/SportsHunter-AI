@@ -144,6 +144,9 @@ class Settings(BaseSettings):
     provider_cache_ttl_seconds: int = 180
     provider_rate_limit_per_minute: int = 60
 
+    telegram_enabled: bool = False
+    bot_token: str | None = None
+    chat_id: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_push_enabled: bool = False
@@ -201,7 +204,7 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return list(value)
 
-    @field_validator("telegram_bot_token", "telegram_chat_id", mode="before")
+    @field_validator("bot_token", "chat_id", "telegram_bot_token", "telegram_chat_id", mode="before")
     @classmethod
     def empty_string_to_none(cls, value: Any) -> Any:
         if value == "":
@@ -218,6 +221,18 @@ class Settings(BaseSettings):
     def ensure_runtime_dirs(self) -> None:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def telegram_is_enabled(self) -> bool:
+        return self.telegram_enabled or self.telegram_push_enabled
+
+    @property
+    def telegram_effective_bot_token(self) -> str | None:
+        return self.bot_token or self.telegram_bot_token
+
+    @property
+    def telegram_effective_chat_id(self) -> str | None:
+        return self.chat_id or self.telegram_chat_id
 
 
 @lru_cache

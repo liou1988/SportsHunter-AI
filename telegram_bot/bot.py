@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-from pipeline.runner import PredictionPipeline
-from telegram_bot.notifier import TelegramNotifier
+from telegram_bot.recommendations import RecommendationTelegramPusher
 
 
 async def main() -> None:
-    notifier = TelegramNotifier()
-    for result in PredictionPipeline().run_today():
-        await notifier.send_prediction(result)
+    await RecommendationTelegramPusher().push_today()
 
 
 if __name__ == "__main__":
