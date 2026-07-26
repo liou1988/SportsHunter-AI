@@ -25,6 +25,7 @@ from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
 from scheduler import jobs
 from scheduler.runner import create_scheduler
+from telegram_bot.fixtures import format_fixtures_message
 from telegram_bot.recommendations import format_recommendations_message
 
 
@@ -260,6 +261,64 @@ def test_telegram_test_api_does_not_return_500_when_send_fails(monkeypatch) -> N
     response = TestClient(app).post("/api/telegram/test")
     assert response.status_code == 200
     assert response.json() == {"success": False, "sent": False}
+
+
+def test_telegram_fixtures_message_formats_real_fixtures() -> None:
+    league = League(id="bra.2", name="Brazilian Serie B", provider="free")
+    fixture = Fixture(
+        id="fixture-1",
+        league=league,
+        home_team=Team(id="home", name="Home FC", provider="free"),
+        away_team=Team(id="away", name="Away FC", provider="free"),
+        start_time=datetime(2026, 7, 27, 22, 30, tzinfo=timezone.utc),
+        status=FixtureStatus.SCHEDULED,
+        score=Score(),
+        provider="free",
+    )
+
+    message = format_fixtures_message([fixture])
+
+    assert "SportsHunter AI Today Real Fixtures" in message
+    assert "Count: 1" in message
+    assert "Home FC vs Away FC" in message
+    assert "Brazilian Serie B (bra.2)" in message
+
+
+def test_telegram_today_fixtures_api_pushes_datahub_fixtures(monkeypatch) -> None:
+    sent_messages: list[str] = []
+    league = League(id="arg.2", name="Argentine Primera Nacional", provider="free")
+    fixture = Fixture(
+        id="fixture-2",
+        league=league,
+        home_team=Team(id="home", name="Arg Home", provider="free"),
+        away_team=Team(id="away", name="Arg Away", provider="free"),
+        start_time=datetime(2026, 7, 27, 23, 0, tzinfo=timezone.utc),
+        status=FixtureStatus.SCHEDULED,
+        score=Score(),
+        provider="free",
+    )
+
+    class FakeDataHub:
+        def get_today_fixtures(self) -> list[Fixture]:
+            return [fixture]
+
+    class FakeNotifier:
+        async def send_message(self, text: str) -> bool:
+            sent_messages.append(text)
+            return True
+
+    monkeypatch.setattr(telegram_router, "TelegramNotifier", FakeNotifier)
+    app.dependency_overrides[telegram_router.get_datahub] = lambda: FakeDataHub()
+    try:
+        response = TestClient(app).post("/api/telegram/fixtures/today")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["sent"] is True
+    assert response.json()["count"] == 1
+    assert "Arg Home vs Arg Away" in sent_messages[0]
 
 
 def test_scheduler_registers_telegram_daily_job() -> None:
