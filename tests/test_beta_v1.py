@@ -106,6 +106,8 @@ def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     assert payload["provider"] == "mock"
     assert payload["request_url"] == "mock://today"
     assert payload["http_status"] == 200
+    assert payload["leagues_checked"] == ["mock"]
+    assert payload["fixtures_per_league"] == {"mock": 1}
     assert payload["fixtures_raw"] == 1
     assert payload["fixtures_parsed"] == 1
     assert payload["first_fixture"]["id"] == "mock-001"
@@ -170,10 +172,82 @@ def test_free_provider_debug_parses_raw_scoreboard(monkeypatch) -> None:
     debug = FreeFootballProvider(settings).debug_today()
     assert debug["provider"] == "free"
     assert debug["http_status"] == 200
+    assert debug["leagues_checked"] == ["eng.1"]
+    assert debug["fixtures_per_league"] == {"eng.1": 1}
     assert debug["fixtures_raw"] == 1
     assert debug["fixtures_parsed"] == 1
     assert debug["first_fixture"]["home_team"]["name"] == "Debug Home"
     assert debug["errors"] == []
+
+
+def test_free_provider_debug_checks_multiple_leagues(monkeypatch) -> None:
+    payloads = {
+        "eng.1": _scoreboard_payload("eng.1", []),
+        "esp.1": _scoreboard_payload("esp.1", ["700", "701"]),
+        "ger.1": _scoreboard_payload("ger.1", ["700"]),
+    }
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, league_id: str) -> None:
+            self.league_id = league_id
+            self.url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_id}/scoreboard?dates=20260726"
+
+        def json(self) -> dict:
+            return payloads[self.league_id]
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, url: str, *args, **kwargs) -> FakeResponse:
+            league_id = next(league for league in payloads if f"/{league}/" in url)
+            return FakeResponse(league_id)
+
+    monkeypatch.setattr("free_provider.football.httpx.Client", FakeClient)
+    settings = Settings(
+        data_provider="free",
+        free_provider_football_leagues=["eng.1", "esp.1", "ger.1"],
+        _env_file=None,
+    )
+    debug = FreeFootballProvider(settings).debug_today()
+    assert debug["leagues_checked"] == ["eng.1", "esp.1", "ger.1"]
+    assert debug["fixtures_per_league"] == {"eng.1": 0, "esp.1": 2, "ger.1": 1}
+    assert debug["fixtures_raw"] == 3
+    assert debug["fixtures_parsed"] == 2
+    assert debug["first_fixture"]["id"] == "700"
+    assert len(debug["request_urls"]) == 3
+
+
+def test_free_provider_today_aggregates_leagues_and_deduplicates() -> None:
+    payloads = {
+        "eng.1": _scoreboard_payload("eng.1", []),
+        "esp.1": _scoreboard_payload("esp.1", ["800", "801"]),
+        "ger.1": _scoreboard_payload("ger.1", ["800"]),
+    }
+
+    class FakeJsonClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            league_id = next(league for league in payloads if f"/{league}/" in path)
+            return payloads[league_id]
+
+    settings = Settings(
+        data_provider="free",
+        free_provider_football_leagues=["eng.1", "esp.1", "ger.1", "esp.1"],
+        _env_file=None,
+    )
+    provider = FreeFootballProvider(settings)
+    provider.client = FakeJsonClient()
+    fixtures = provider.get_today_fixtures()
+    assert [fixture.id for fixture in fixtures] == ["800", "801"]
+    assert {fixture.league.id for fixture in fixtures} == {"esp.1"}
 
 
 def test_refresh_live_job_serializes_slots_dataclass(monkeypatch) -> None:
@@ -193,4 +267,47 @@ def test_risk_breakdown_serializes_slots_dataclass() -> None:
     breakdown = RiskBreakdown(items=[RiskReason(source="data_missing", score=14.0, reason="Data missing")])
     assert breakdown.to_dict() == {
         "items": [{"source": "data_missing", "score": 14.0, "reason": "Data missing"}]
+    }
+
+
+def _scoreboard_payload(league_id: str, event_ids: list[str]) -> dict:
+    return {
+        "leagues": [{"name": f"League {league_id}"}],
+        "events": [
+            {
+                "id": event_id,
+                "date": "2026-07-26T12:00:00Z",
+                "season": {"slug": "regular-season"},
+                "competitions": [
+                    {
+                        "venue": {"fullName": "Multi League Stadium"},
+                        "status": {
+                            "type": {"state": "pre", "name": "STATUS_SCHEDULED", "detail": "Scheduled"},
+                            "displayClock": "",
+                        },
+                        "competitors": [
+                            {
+                                "homeAway": "home",
+                                "score": "0",
+                                "team": {
+                                    "id": f"{event_id}-home",
+                                    "displayName": f"{league_id} Home {event_id}",
+                                    "abbreviation": "HOM",
+                                },
+                            },
+                            {
+                                "homeAway": "away",
+                                "score": "0",
+                                "team": {
+                                    "id": f"{event_id}-away",
+                                    "displayName": f"{league_id} Away {event_id}",
+                                    "abbreviation": "AWY",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            }
+            for event_id in event_ids
+        ],
     }

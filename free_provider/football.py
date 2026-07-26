@@ -8,7 +8,18 @@ import httpx
 
 from config.settings import Settings
 from datahub.http_client import HttpJsonClient
-from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Statistics, Team, to_plain_dict
+from datahub.models import (
+    Fixture,
+    FixtureStatus,
+    League,
+    Odds,
+    OddsMarket,
+    Score,
+    Standing,
+    Statistics,
+    Team,
+    to_plain_dict,
+)
 from datahub.provider import BaseProvider, ProviderUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -21,6 +32,13 @@ LEAGUE_NAMES = {
     "ger.1": "German Bundesliga",
     "fra.1": "French Ligue 1",
     "uefa.champions": "UEFA Champions League",
+    "uefa.europa": "UEFA Europa League",
+    "uefa.europa.conf": "UEFA Europa Conference League",
+    "fifa.world": "FIFA World Cup",
+    "usa.1": "Major League Soccer",
+    "mex.1": "Liga MX",
+    "por.1": "Portuguese Primeira Liga",
+    "ned.1": "Dutch Eredivisie",
 }
 
 
@@ -37,32 +55,54 @@ class FreeFootballProvider(BaseProvider):
     def debug_today(self) -> dict:
         tz = ZoneInfo(self.settings.timezone)
         today = datetime.now(tz).strftime("%Y%m%d")
-        league_id = next(iter(self.settings.free_provider_football_leagues), "eng.1")
-        path = f"/apis/site/v2/sports/soccer/{league_id}/scoreboard"
-        request_url = f"{self.settings.free_provider_base_url.rstrip('/')}{path}?dates={today}"
+        leagues_checked = self._configured_leagues()
+        request_url = ""
+        request_urls: list[str] = []
         errors: list[str] = []
+        http_statuses: dict[str, int | None] = {}
         http_status: int | None = None
         fixtures_raw = 0
         fixtures_parsed = 0
+        fixtures_per_league: dict[str, int] = {}
+        parsed_fixtures: list[Fixture] = []
         first_fixture: dict = {}
 
-        try:
-            with httpx.Client(timeout=self.settings.provider_timeout_seconds, follow_redirects=True) as client:
-                response = client.get(
-                    f"{self.settings.free_provider_base_url.rstrip('/')}{path}",
-                    params={"dates": today},
-                )
-                request_url = str(response.url)
-                http_status = response.status_code
-                payload = response.json()
-            events = payload.get("events", []) or []
-            fixtures_raw = len(events)
-            parsed = self._parse_scoreboard(league_id, payload)
-            fixtures_parsed = len(parsed)
-            first_fixture = to_plain_dict(parsed[0]) if parsed else {}
-        except Exception as exc:  # noqa: BLE001 - debug endpoint must report provider failures
-            logger.error("free provider debug request failed", extra={"league": league_id}, exc_info=exc)
-            errors.append(str(exc))
+        with httpx.Client(timeout=self.settings.provider_timeout_seconds, follow_redirects=True) as client:
+            for league_id in leagues_checked:
+                path = self._scoreboard_path(league_id)
+                url = f"{self.settings.free_provider_base_url.rstrip('/')}{path}"
+                try:
+                    response = client.get(
+                        url,
+                        params={"dates": today},
+                    )
+                    response_url = str(response.url)
+                    request_urls.append(response_url)
+                    if not request_url:
+                        request_url = response_url
+                    http_statuses[league_id] = response.status_code
+                    payload = response.json()
+                    events = payload.get("events", []) or []
+                    parsed = self._parse_scoreboard(league_id, payload)
+                    fixtures_raw += len(events)
+                    fixtures_per_league[league_id] = len(parsed)
+                    parsed_fixtures.extend(parsed)
+                except Exception as exc:  # noqa: BLE001 - debug endpoint must report provider failures
+                    logger.error("free provider debug request failed", extra={"league": league_id}, exc_info=exc)
+                    fixtures_per_league.setdefault(league_id, 0)
+                    http_statuses.setdefault(league_id, None)
+                    errors.append(f"{league_id}: {exc}")
+
+        deduped = self._dedupe_fixtures(parsed_fixtures)
+        fixtures_parsed = len(deduped)
+        first_fixture = to_plain_dict(deduped[0]) if deduped else {}
+        non_200 = [status for status in http_statuses.values() if status and status >= 400]
+        ok_statuses = [status for status in http_statuses.values() if status is not None]
+        http_status = (
+            non_200[0]
+            if non_200
+            else (200 if ok_statuses and all(status == 200 for status in ok_statuses) else None)
+        )
 
         return {
             "provider": self.name,
@@ -70,7 +110,11 @@ class FreeFootballProvider(BaseProvider):
             "timezone": self.settings.timezone,
             "today": today,
             "request_url": request_url,
+            "request_urls": request_urls,
             "http_status": http_status,
+            "http_statuses": http_statuses,
+            "leagues_checked": leagues_checked,
+            "fixtures_per_league": fixtures_per_league,
             "fixtures_raw": fixtures_raw,
             "fixtures_parsed": fixtures_parsed,
             "first_fixture": first_fixture,
@@ -82,12 +126,12 @@ class FreeFootballProvider(BaseProvider):
         date_key = datetime.now(tz).strftime("%Y%m%d")
         fixtures: list[Fixture] = []
         failures: list[str] = []
-        for league_id in self.settings.free_provider_football_leagues:
+        for league_id in self._configured_leagues():
             try:
                 payload = self.retry(
                     f"scoreboard:{league_id}",
                     lambda league_id=league_id: self.client.get_json(
-                        f"/apis/site/v2/sports/soccer/{league_id}/scoreboard",
+                        self._scoreboard_path(league_id),
                         params={"dates": date_key},
                     ),
                 )
@@ -97,7 +141,7 @@ class FreeFootballProvider(BaseProvider):
                 failures.append(f"{league_id}: {exc}")
         if not fixtures and failures:
             raise ProviderUnavailableError(self.name, "; ".join(failures))
-        return fixtures
+        return self._dedupe_fixtures(fixtures)
 
     def get_fixture(self, fixture_id: str) -> Fixture:
         for fixture in self.get_today_fixtures():
@@ -242,6 +286,29 @@ class FreeFootballProvider(BaseProvider):
             abbreviation=payload.get("abbreviation"),
             provider=self.name,
         )
+
+    def _configured_leagues(self) -> list[str]:
+        seen: set[str] = set()
+        leagues: list[str] = []
+        for league_id in self.settings.free_provider_football_leagues or ["eng.1"]:
+            normalized = str(league_id).strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                leagues.append(normalized)
+        return leagues or ["eng.1"]
+
+    @staticmethod
+    def _scoreboard_path(league_id: str) -> str:
+        return f"/apis/site/v2/sports/soccer/{league_id}/scoreboard"
+
+    @staticmethod
+    def _dedupe_fixtures(fixtures: list[Fixture]) -> list[Fixture]:
+        deduped: dict[tuple[str, str], Fixture] = {}
+        for fixture in fixtures:
+            key = (fixture.provider, fixture.id)
+            if key not in deduped:
+                deduped[key] = fixture
+        return list(deduped.values())
 
     @staticmethod
     def _parse_datetime(value: str | None) -> datetime:

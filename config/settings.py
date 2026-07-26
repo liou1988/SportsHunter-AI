@@ -18,6 +18,21 @@ from pydantic_settings import (
 
 
 _UNHANDLED = object()
+DEFAULT_FREE_FOOTBALL_LEAGUES = [
+    "eng.1",
+    "esp.1",
+    "ger.1",
+    "ita.1",
+    "fra.1",
+    "uefa.champions",
+    "uefa.europa",
+    "uefa.europa.conf",
+    "fifa.world",
+    "usa.1",
+    "mex.1",
+    "por.1",
+    "ned.1",
+]
 
 
 def _is_optional(annotation: Any) -> bool:
@@ -121,9 +136,7 @@ class Settings(BaseSettings):
     football_data_source: str = "free"
     football_data_season: int | None = 2026
     free_provider_base_url: str = "https://site.api.espn.com"
-    free_provider_football_leagues: list[str] = Field(
-        default_factory=lambda: ["eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "uefa.champions"]
-    )
+    free_provider_football_leagues: list[str] = Field(default_factory=lambda: DEFAULT_FREE_FOOTBALL_LEAGUES.copy())
 
     provider_timeout_seconds: float = 10.0
     provider_retry_attempts: int = 3
