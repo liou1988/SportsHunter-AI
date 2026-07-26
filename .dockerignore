@@ -1,0 +1,15 @@
+.git
+.venv
+.python312
+.tools
+__pycache__
+.pytest_cache
+*.pyc
+*.pyo
+*.db
+*.sqlite
+*.sqlite3
+logs
+reports
+.env
+SportsHunter-AI.zip

@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from pipeline.context import PipelineContext, build_pipeline_context
+from pipeline.models import PredictionResult
+
+
+class PredictionPipeline:
+    def __init__(self, context: PipelineContext | None = None) -> None:
+        self.context = context or build_pipeline_context()
+
+    def run_today(self) -> list[PredictionResult]:
+        return [self.run_fixture(fixture.id) for fixture in self.context.datahub.get_today_fixtures()]
+
+    def run_fixture(self, fixture_id: str) -> PredictionResult:
+        fixture = self.context.datahub.get_fixture(fixture_id)
+        features = self.context.features.build(fixture_id)
+        hunter_score = self.context.rating.score(features)
+        risk = self.context.risk.evaluate(features)
+        signal = self.context.signal.generate(hunter_score, risk, features)
+        predicted_side = fixture.home_team.name if signal.stake > 0 else None
+        return PredictionResult(
+            fixture=fixture,
+            features=features,
+            hunter_score=hunter_score,
+            risk=risk,
+            signal=signal,
+            predicted_side=predicted_side,
+        )
+
+    def run_live(self, fixture_id: str) -> PredictionResult:
+        return self.run_fixture(fixture_id)
