@@ -9,24 +9,9 @@ from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError, Te
 
 from config.settings import Settings, get_settings
 from pipeline.models import PredictionResult
+from telegram_bot.localization import translate_risk_level, translate_signal, translate_team_name
 
 logger = logging.getLogger(__name__)
-
-
-SIGNAL_LABELS = {
-    "STRONG_BUY": "强烈推荐",
-    "BUY": "推荐",
-    "WATCH": "观察",
-    "PASS": "跳过",
-    "BLOCK": "风控拦截",
-}
-
-RISK_LABELS = {
-    "LOW": "低",
-    "MEDIUM": "中",
-    "HIGH": "高",
-    "BLOCK": "拦截",
-}
 
 BOT_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
 
@@ -188,11 +173,13 @@ class TelegramNotifier:
             return self._error_result(exc, status)
 
     async def send_prediction(self, result: PredictionResult) -> bool:
-        signal = SIGNAL_LABELS.get(result.signal.signal.value, result.signal.signal.value)
-        risk = RISK_LABELS.get(result.risk.level.value, result.risk.level.value)
+        signal = translate_signal(result.signal.signal.value)
+        risk = translate_risk_level(result.risk.level.value)
+        home_team = translate_team_name(result.fixture.home_team.name)
+        away_team = translate_team_name(result.fixture.away_team.name)
         text = (
             f"SportsHunter AI 预测信号：{signal}\n"
-            f"{result.fixture.home_team.name} 对阵 {result.fixture.away_team.name}\n"
+            f"{home_team} 对阵 {away_team}\n"
             f"猎手评分：{result.hunter_score.score} {result.hunter_score.grade}\n"
             f"风险等级：{risk}（{result.risk.score}）\n"
             f"{result.signal.reason}"

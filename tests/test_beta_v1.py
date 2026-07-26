@@ -26,6 +26,7 @@ from api.routers import telegram as telegram_router
 from scheduler import jobs
 from scheduler.runner import create_scheduler
 from telegram_bot.fixtures import format_fixtures_message
+from telegram_bot.localization import translate_match_text, translate_team_name
 from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
 from telegram_bot.recommendations import format_recommendations_message
 
@@ -219,13 +220,13 @@ def test_telegram_message_formats_recommendations() -> None:
             "count": 1,
             "items": [
                 {
-                    "league": "Debug League",
-                    "match": "Debug Home vs Debug Away",
+                    "league": "Brazilian Serie B",
+                    "match": "Atlético Goianiense vs Operário PR",
                     "kickoff": "2026-07-26T12:00:00+00:00",
                     "hunter_score": 91.0,
                     "confidence": 0.91,
                     "signal": "BUY",
-                    "predicted_side": "Debug Home",
+                    "predicted_side": "Atlético Goianiense",
                     "stake": "2U",
                     "reason": "Debug reason",
                     "odds": {},
@@ -233,8 +234,10 @@ def test_telegram_message_formats_recommendations() -> None:
             ],
         }
     )
-    assert "Debug Home 对阵 Debug Away" in message
+    assert "戈亚尼亚竞技 对阵 欧帕瑞欧PR" in message
+    assert "联赛：巴西乙级联赛" in message
     assert "信号：推荐" in message
+    assert "推荐方向：戈亚尼亚竞技" in message
     assert "仓位：2U" in message
     assert "开赛时间：2026-07-26 20:00 北京时间" in message
 
@@ -306,13 +309,25 @@ def test_telegram_notifier_rejects_bot_chat_id() -> None:
     assert any("CHAT_ID 不能填写机器人自身 ID" in warning for warning in status.warnings)
 
 
+def test_telegram_localizes_current_fixture_team_names() -> None:
+    assert translate_team_name("Atlético Goianiense") == "戈亚尼亚竞技"
+    assert translate_team_name("Operário PR") == "欧帕瑞欧PR"
+    assert translate_team_name("CRB") == "雷加塔斯巴西"
+    assert translate_team_name("Vila Nova") == "维拉诺瓦"
+    assert translate_team_name("Sport") == "累西腓体育"
+    assert translate_team_name("Cuiabá") == "库亚巴"
+    assert translate_team_name("Atlanta") == "亚特兰大竞技"
+    assert translate_team_name("Almagro") == "阿尔马格罗"
+    assert translate_match_text("CRB vs Vila Nova") == "雷加塔斯巴西 对阵 维拉诺瓦"
+
+
 def test_telegram_fixtures_message_formats_real_fixtures() -> None:
     league = League(id="bra.2", name="Brazilian Serie B", provider="free")
     fixture = Fixture(
         id="fixture-1",
         league=league,
-        home_team=Team(id="home", name="Home FC", provider="free"),
-        away_team=Team(id="away", name="Away FC", provider="free"),
+        home_team=Team(id="home", name="Atlético Goianiense", provider="free"),
+        away_team=Team(id="away", name="Operário PR", provider="free"),
         start_time=datetime(2026, 7, 27, 22, 30, tzinfo=timezone.utc),
         status=FixtureStatus.SCHEDULED,
         score=Score(),
@@ -323,7 +338,7 @@ def test_telegram_fixtures_message_formats_real_fixtures() -> None:
 
     assert "SportsHunter AI 今日真实赛程" in message
     assert "比赛数量：1" in message
-    assert "Home FC 对阵 Away FC" in message
+    assert "戈亚尼亚竞技 对阵 欧帕瑞欧PR" in message
     assert "巴西乙级联赛（bra.2）" in message
     assert "开赛时间：2026-07-28 06:30 北京时间" in message
 
@@ -334,8 +349,8 @@ def test_telegram_today_fixtures_api_pushes_datahub_fixtures(monkeypatch) -> Non
     fixture = Fixture(
         id="fixture-2",
         league=league,
-        home_team=Team(id="home", name="Arg Home", provider="free"),
-        away_team=Team(id="away", name="Arg Away", provider="free"),
+        home_team=Team(id="home", name="Atlanta", provider="free"),
+        away_team=Team(id="away", name="Almagro", provider="free"),
         start_time=datetime(2026, 7, 27, 23, 0, tzinfo=timezone.utc),
         status=FixtureStatus.SCHEDULED,
         score=Score(),
@@ -363,7 +378,7 @@ def test_telegram_today_fixtures_api_pushes_datahub_fixtures(monkeypatch) -> Non
     assert response.json()["sent"] is True
     assert response.json()["count"] == 1
     assert response.json()["error"] is None
-    assert "Arg Home 对阵 Arg Away" in sent_messages[0]
+    assert "亚特兰大竞技 对阵 阿尔马格罗" in sent_messages[0]
 
 
 def test_telegram_today_recommendations_api_pushes_recommendations(monkeypatch) -> None:
