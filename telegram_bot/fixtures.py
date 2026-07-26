@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from datahub.hub import DataHub, build_datahub
 from datahub.models import Fixture
-from telegram_bot.notifier import TelegramNotifier
+from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
 
 
 FIXTURE_STATUS_LABELS = {
@@ -60,9 +60,21 @@ class FixtureTelegramPushResult:
     sent: bool
     count: int
     message: str
+    success: bool | None = None
+    error: str | None = None
+    error_code: str | None = None
+    message_id: int | None = None
 
     def to_dict(self) -> dict:
-        return {"sent": self.sent, "count": self.count, "message": self.message}
+        return {
+            "success": self.sent if self.success is None else self.success,
+            "sent": self.sent,
+            "count": self.count,
+            "message": self.message,
+            "error": self.error,
+            "error_code": self.error_code,
+            "message_id": self.message_id,
+        }
 
 
 class TodayFixtureTelegramPusher:
@@ -77,8 +89,24 @@ class TodayFixtureTelegramPusher:
     async def push_today(self) -> FixtureTelegramPushResult:
         fixtures = self.datahub.get_today_fixtures()
         message = format_fixtures_message(fixtures)
-        sent = await self.notifier.send_message(message)
-        return FixtureTelegramPushResult(sent=sent, count=len(fixtures), message=message)
+        send_result = await _send_with_result(self.notifier, message)
+        return FixtureTelegramPushResult(
+            success=send_result.success,
+            sent=send_result.sent,
+            count=len(fixtures),
+            message=message,
+            error=send_result.error,
+            error_code=send_result.error_code,
+            message_id=send_result.message_id,
+        )
+
+
+async def _send_with_result(notifier: TelegramNotifier, message: str) -> TelegramSendResult:
+    sender = getattr(notifier, "send_message_with_result", None)
+    if callable(sender):
+        return await sender(message)
+    sent = await notifier.send_message(message)
+    return TelegramSendResult(success=sent, sent=sent)
 
 
 def format_fixtures_message(fixtures: list[Fixture]) -> str:

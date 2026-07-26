@@ -26,6 +26,7 @@ from api.routers import telegram as telegram_router
 from scheduler import jobs
 from scheduler.runner import create_scheduler
 from telegram_bot.fixtures import format_fixtures_message
+from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
 from telegram_bot.recommendations import format_recommendations_message
 
 
@@ -242,26 +243,67 @@ def test_telegram_test_api_sends_test_message(monkeypatch) -> None:
     sent_messages: list[str] = []
 
     class FakeNotifier:
-        async def send_message(self, text: str) -> bool:
+        async def send_message_with_result(self, text: str) -> TelegramSendResult:
             sent_messages.append(text)
-            return True
+            return TelegramSendResult(success=True, sent=True, message_id=123)
 
     monkeypatch.setattr(telegram_router, "TelegramNotifier", FakeNotifier)
     response = TestClient(app).post("/api/telegram/test")
     assert response.status_code == 200
-    assert response.json() == {"success": True, "sent": True}
+    assert response.json() == {"success": True, "sent": True, "message_id": 123}
     assert sent_messages == ["SportsHunter AI 测试消息"]
 
 
 def test_telegram_test_api_does_not_return_500_when_send_fails(monkeypatch) -> None:
     class FakeNotifier:
-        async def send_message(self, text: str) -> bool:
+        async def send_message_with_result(self, text: str) -> TelegramSendResult:
             raise RuntimeError("telegram api failed")
 
     monkeypatch.setattr(telegram_router, "TelegramNotifier", FakeNotifier)
     response = TestClient(app).post("/api/telegram/test")
     assert response.status_code == 200
-    assert response.json() == {"success": False, "sent": False}
+    payload = response.json()
+    assert payload["success"] is False
+    assert payload["sent"] is False
+    assert payload["error_code"] == "INTERNAL_ERROR"
+    assert "Telegram 测试发送异常" in payload["error"]
+
+
+def test_telegram_status_api_returns_diagnostics(monkeypatch) -> None:
+    class FakeNotifier:
+        async def health_check(self) -> dict:
+            return {"provider": "telegram", "health": "ok", "config": {"ready": True}, "error": None}
+
+    monkeypatch.setattr(telegram_router, "TelegramNotifier", FakeNotifier)
+    response = TestClient(app).get("/api/telegram/status")
+    assert response.status_code == 200
+    assert response.json()["provider"] == "telegram"
+    assert response.json()["config"]["ready"] is True
+
+
+def test_telegram_notifier_reports_missing_config() -> None:
+    import asyncio
+
+    settings = Settings(telegram_enabled=True, bot_token="", chat_id="", _env_file=None)
+    notifier = TelegramNotifier(settings)
+    result = asyncio.run(notifier.send_message_with_result("测试"))
+    assert result.sent is False
+    assert result.error_code == "CONFIG_NOT_READY"
+    assert result.error is not None
+    assert "缺少 BOT_TOKEN" in result.error
+    assert "缺少 CHAT_ID" in result.error
+
+
+def test_telegram_notifier_rejects_bot_chat_id() -> None:
+    settings = Settings(
+        telegram_enabled=True,
+        bot_token="123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        chat_id="123456789",
+        _env_file=None,
+    )
+    status = TelegramNotifier(settings).config_status()
+    assert status.ready is False
+    assert any("CHAT_ID 不能填写机器人自身 ID" in warning for warning in status.warnings)
 
 
 def test_telegram_fixtures_message_formats_real_fixtures() -> None:
@@ -320,7 +362,32 @@ def test_telegram_today_fixtures_api_pushes_datahub_fixtures(monkeypatch) -> Non
     assert response.json()["success"] is True
     assert response.json()["sent"] is True
     assert response.json()["count"] == 1
+    assert response.json()["error"] is None
     assert "Arg Home 对阵 Arg Away" in sent_messages[0]
+
+
+def test_telegram_today_recommendations_api_pushes_recommendations(monkeypatch) -> None:
+    sent_messages: list[str] = []
+
+    class FakeNotifier:
+        async def send_message(self, text: str) -> bool:
+            sent_messages.append(text)
+            return True
+
+    monkeypatch.setattr(telegram_router, "TelegramNotifier", FakeNotifier)
+    app.dependency_overrides[telegram_router.get_prediction_pipeline] = lambda: _fake_recommendation_pipeline()
+    try:
+        response = TestClient(app).post("/api/telegram/recommendations/today")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["sent"] is True
+    assert payload["count"] == 2
+    assert "SportsHunter AI 今日推荐" in sent_messages[0]
+    assert "信号：强烈推荐" in sent_messages[0]
 
 
 def test_scheduler_registers_telegram_daily_job() -> None:
