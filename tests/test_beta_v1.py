@@ -232,9 +232,10 @@ def test_telegram_message_formats_recommendations() -> None:
             ],
         }
     )
-    assert "Debug Home vs Debug Away" in message
-    assert "信号: BUY" in message
-    assert "仓位: 2U" in message
+    assert "Debug Home 对阵 Debug Away" in message
+    assert "信号：推荐" in message
+    assert "仓位：2U" in message
+    assert "开赛时间：2026-07-26 20:00 北京时间" in message
 
 
 def test_telegram_test_api_sends_test_message(monkeypatch) -> None:
@@ -278,10 +279,11 @@ def test_telegram_fixtures_message_formats_real_fixtures() -> None:
 
     message = format_fixtures_message([fixture])
 
-    assert "SportsHunter AI Today Real Fixtures" in message
-    assert "Count: 1" in message
-    assert "Home FC vs Away FC" in message
-    assert "Brazilian Serie B (bra.2)" in message
+    assert "SportsHunter AI 今日真实赛程" in message
+    assert "比赛数量：1" in message
+    assert "Home FC 对阵 Away FC" in message
+    assert "巴西乙级联赛（bra.2）" in message
+    assert "开赛时间：2026-07-28 06:30 北京时间" in message
 
 
 def test_telegram_today_fixtures_api_pushes_datahub_fixtures(monkeypatch) -> None:
@@ -318,7 +320,7 @@ def test_telegram_today_fixtures_api_pushes_datahub_fixtures(monkeypatch) -> Non
     assert response.json()["success"] is True
     assert response.json()["sent"] is True
     assert response.json()["count"] == 1
-    assert "Arg Home vs Arg Away" in sent_messages[0]
+    assert "Arg Home 对阵 Arg Away" in sent_messages[0]
 
 
 def test_scheduler_registers_telegram_daily_job() -> None:

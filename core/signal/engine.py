@@ -23,19 +23,19 @@ class SignalEngine:
             signal=signal,
             stake=float(config.get("stake", 0.0)),
             priority=int(config.get("priority", 0)),
-            reason="; ".join(reasons),
+            reason="；".join(reasons),
             breakdown=SignalBreakdown(reasons=reasons),
         )
 
     @staticmethod
     def _reasons(signal: Signal, hunter_score: HunterScore, risk: RiskResult, vector: FeatureVector) -> list[str]:
         if signal == Signal.BLOCK:
-            return risk.reasons or ["Risk engine blocked this fixture"]
+            return risk.reasons or ["风险引擎拦截本场比赛"]
         reasons = [hunter_score.explanation]
         if risk.level.value != "LOW":
-            reasons.append(f"Risk level is {risk.level.value}")
+            reasons.append(f"风险等级为 {risk.level.value}")
         if hunter_score.score < 80:
-            reasons.append("Hunter Score is below the pass threshold")
+            reasons.append("猎手评分低于推荐阈值")
         if vector.warnings:
-            reasons.append(f"Feature warnings: {', '.join(vector.warnings)}")
+            reasons.append(f"特征数据告警：{', '.join(vector.warnings)}")
         return reasons

@@ -24,7 +24,7 @@ def _recommendation_item(pipeline: PredictionPipeline, result: PredictionResult)
     odds = _fixture_odds(pipeline, fixture.id)
     return {
         "league": fixture.league.name,
-        "match": f"{fixture.home_team.name} vs {fixture.away_team.name}",
+        "match": f"{fixture.home_team.name} 对阵 {fixture.away_team.name}",
         "kickoff": fixture.start_time.isoformat(),
         "hunter_score": result.hunter_score.score,
         "confidence": result.hunter_score.confidence,

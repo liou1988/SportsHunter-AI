@@ -10,6 +10,22 @@ from pipeline.models import PredictionResult
 logger = logging.getLogger(__name__)
 
 
+SIGNAL_LABELS = {
+    "STRONG_BUY": "强烈推荐",
+    "BUY": "推荐",
+    "WATCH": "观察",
+    "PASS": "跳过",
+    "BLOCK": "风控拦截",
+}
+
+RISK_LABELS = {
+    "LOW": "低",
+    "MEDIUM": "中",
+    "HIGH": "高",
+    "BLOCK": "拦截",
+}
+
+
 class TelegramNotifier:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -32,11 +48,13 @@ class TelegramNotifier:
             return False
 
     async def send_prediction(self, result: PredictionResult) -> bool:
+        signal = SIGNAL_LABELS.get(result.signal.signal.value, result.signal.signal.value)
+        risk = RISK_LABELS.get(result.risk.level.value, result.risk.level.value)
         text = (
-            f"SportsHunter-AI {result.signal.signal.value}\n"
-            f"{result.fixture.home_team.name} vs {result.fixture.away_team.name}\n"
-            f"Hunter Score: {result.hunter_score.score} {result.hunter_score.grade}\n"
-            f"Risk: {result.risk.level.value} ({result.risk.score})\n"
+            f"SportsHunter AI 预测信号：{signal}\n"
+            f"{result.fixture.home_team.name} 对阵 {result.fixture.away_team.name}\n"
+            f"猎手评分：{result.hunter_score.score} {result.hunter_score.grade}\n"
+            f"风险等级：{risk}（{result.risk.score}）\n"
             f"{result.signal.reason}"
         )
         return await self.send_message(text)
