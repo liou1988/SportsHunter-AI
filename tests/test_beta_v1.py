@@ -173,14 +173,18 @@ def test_telegram_message_formats_recommendations() -> None:
 
 
 def test_telegram_test_api_sends_test_message(monkeypatch) -> None:
-    class FakePusher:
-        async def send_test_message(self):
-            return SimpleNamespace(to_dict=lambda: {"sent": True, "count": 0, "message": "SportsHunter AI 测试消息"})
+    sent_messages: list[str] = []
 
-    monkeypatch.setattr(telegram_router, "RecommendationTelegramPusher", FakePusher)
+    class FakeNotifier:
+        async def send_message(self, text: str) -> bool:
+            sent_messages.append(text)
+            return True
+
+    monkeypatch.setattr(telegram_router, "TelegramNotifier", FakeNotifier)
     response = TestClient(app).post("/api/telegram/test")
     assert response.status_code == 200
-    assert response.json() == {"sent": True, "count": 0, "message": "SportsHunter AI 测试消息"}
+    assert response.json() == {"success": True, "sent": True}
+    assert sent_messages == ["SportsHunter AI 测试消息"]
 
 
 def test_scheduler_registers_telegram_daily_job() -> None:
