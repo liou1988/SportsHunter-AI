@@ -20,6 +20,7 @@ from datahub.providers.mock import MockProvider
 from data_sync.models import SyncSummary
 from core.risk.models import RiskBreakdown, RiskReason
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
+from api import dependencies
 from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
@@ -228,6 +229,18 @@ def test_api_health() -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["app"] == "SportsHunter-AI"
+
+
+def test_api_dependencies_reuse_datahub_cache() -> None:
+    dependencies.get_datahub.cache_clear()
+    try:
+        first = dependencies.get_datahub()
+        second = dependencies.get_datahub()
+        pipeline = dependencies.get_prediction_pipeline()
+        assert first is second
+        assert pipeline.context.datahub is first
+    finally:
+        dependencies.get_datahub.cache_clear()
 
 
 def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:

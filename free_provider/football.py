@@ -202,31 +202,40 @@ class FreeFootballProvider(BaseProvider):
 
         with httpx.Client(timeout=self.settings.provider_timeout_seconds, follow_redirects=True) as client:
             if "espn" in sources_checked:
-                for league_id in leagues_checked:
-                    path = self._scoreboard_path(league_id)
-                    url = f"{self.settings.free_provider_base_url.rstrip('/')}{path}"
-                    try:
-                        response = client.get(
-                            url,
-                            params={"dates": today},
-                        )
-                        response_url = str(response.url)
-                        request_urls.append(response_url)
-                        if not request_url:
-                            request_url = response_url
-                        http_statuses[f"espn:{league_id}"] = response.status_code
-                        payload = response.json()
-                        events = payload.get("events", []) or []
-                        parsed = self._parse_scoreboard(league_id, payload)
-                        fixtures_raw += len(events)
-                        fixtures_per_league[league_id] = len(parsed)
-                        fixtures_per_source["espn"] = fixtures_per_source.get("espn", 0) + len(parsed)
-                        parsed_fixtures.extend(parsed)
-                    except Exception as exc:  # noqa: BLE001 - debug endpoint must report provider failures
-                        logger.error("free provider debug request failed", extra={"source": "espn", "league": league_id}, exc_info=exc)
-                        fixtures_per_league.setdefault(league_id, 0)
-                        http_statuses.setdefault(f"espn:{league_id}", None)
-                        errors.append(f"espn:{league_id}: {exc}")
+                debug_results: dict[int, tuple[str, int, int, list[Fixture]]] = {}
+                workers = min(8, len(leagues_checked)) or 1
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {
+                        executor.submit(self._debug_espn_scoreboard, client, league_id, today): (index, league_id)
+                        for index, league_id in enumerate(leagues_checked)
+                    }
+                    for future in as_completed(futures):
+                        index, league_id = futures[future]
+                        try:
+                            debug_results[index] = future.result()
+                        except Exception as exc:  # noqa: BLE001 - debug endpoint must report provider failures
+                            logger.error(
+                                "free provider debug request failed",
+                                extra={"source": "espn", "league": league_id},
+                                exc_info=exc,
+                            )
+                            fixtures_per_league.setdefault(league_id, 0)
+                            http_statuses.setdefault(f"espn:{league_id}", None)
+                            errors.append(f"espn:{league_id}: {exc}")
+
+                for index, league_id in enumerate(leagues_checked):
+                    result = debug_results.get(index)
+                    if result is None:
+                        continue
+                    response_url, status_code, raw_count, parsed = result
+                    request_urls.append(response_url)
+                    if not request_url:
+                        request_url = response_url
+                    http_statuses[f"espn:{league_id}"] = status_code
+                    fixtures_raw += raw_count
+                    fixtures_per_league[league_id] = len(parsed)
+                    fixtures_per_source["espn"] = fixtures_per_source.get("espn", 0) + len(parsed)
+                    parsed_fixtures.extend(parsed)
 
             if THESPORTSDB_SOURCE in sources_checked:
                 url = f"{self.settings.free_provider_thesportsdb_base_url.rstrip('/')}/eventsday.php"
@@ -454,6 +463,19 @@ class FreeFootballProvider(BaseProvider):
         for index in range(len(leagues)):
             fixtures.extend(fixtures_by_index.get(index, []))
         return fixtures
+
+    def _debug_espn_scoreboard(
+        self,
+        client: httpx.Client,
+        league_id: str,
+        date_key: str,
+    ) -> tuple[str, int, int, list[Fixture]]:
+        path = self._scoreboard_path(league_id)
+        url = f"{self.settings.free_provider_base_url.rstrip('/')}{path}"
+        response = client.get(url, params={"dates": date_key})
+        payload = response.json()
+        events = payload.get("events", []) or []
+        return str(response.url), response.status_code, len(events), self._parse_scoreboard(league_id, payload)
 
     def _fetch_espn_scoreboard(self, league_id: str, date_key: str) -> dict:
         return self.retry(
