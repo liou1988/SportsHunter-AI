@@ -23,9 +23,13 @@ class TelegramNotifier:
         if not bot_token or not chat_id:
             logger.warning("telegram enabled but token/chat id is missing")
             return False
-        bot = Bot(bot_token)
-        await bot.send_message(chat_id=chat_id, text=text)
-        return True
+        try:
+            bot = Bot(bot_token)
+            await bot.send_message(chat_id=chat_id, text=text)
+            return True
+        except Exception as exc:  # noqa: BLE001 - Telegram test endpoint must not crash the API
+            logger.exception("telegram send failed", exc_info=exc)
+            return False
 
     async def send_prediction(self, result: PredictionResult) -> bool:
         text = (

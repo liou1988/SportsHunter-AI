@@ -187,6 +187,17 @@ def test_telegram_test_api_sends_test_message(monkeypatch) -> None:
     assert sent_messages == ["SportsHunter AI 测试消息"]
 
 
+def test_telegram_test_api_does_not_return_500_when_send_fails(monkeypatch) -> None:
+    class FakeNotifier:
+        async def send_message(self, text: str) -> bool:
+            raise RuntimeError("telegram api failed")
+
+    monkeypatch.setattr(telegram_router, "TelegramNotifier", FakeNotifier)
+    response = TestClient(app).post("/api/telegram/test")
+    assert response.status_code == 200
+    assert response.json() == {"success": False, "sent": False}
+
+
 def test_scheduler_registers_telegram_daily_job() -> None:
     scheduler = create_scheduler()
     assert "telegram_daily_recommendations" in {job.id for job in scheduler.get_jobs()}
