@@ -76,6 +76,14 @@ def test_env_example_defaults_to_free_provider() -> None:
     assert "DATA_PROVIDER=free" in text
     assert "FOOTBALL_DATA_SOURCE=free" in text
     assert "FOOTBALL_DATA_SEASON=2026" in text
+    assert "bra.2" in text
+
+
+def test_settings_default_free_leagues_include_south_america() -> None:
+    settings = Settings(_env_file=None)
+    assert "bra.1" in settings.free_provider_football_leagues
+    assert "bra.2" in settings.free_provider_football_leagues
+    assert "arg.1" in settings.free_provider_football_leagues
 
 
 def test_docker_compose_allows_telegram_env_override() -> None:
@@ -86,6 +94,15 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}" in text
     assert "TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}" in text
     assert "TELEGRAM_PUSH_ENABLED: ${TELEGRAM_PUSH_ENABLED:-false}" in text
+
+
+def test_docker_compose_allows_free_provider_leagues_env_override() -> None:
+    text = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert "DATA_PROVIDER: ${DATA_PROVIDER:-free}" in text
+    assert "FOOTBALL_DATA_SOURCE: ${FOOTBALL_DATA_SOURCE:-free}" in text
+    assert "FOOTBALL_DATA_SEASON: ${FOOTBALL_DATA_SEASON:-2026}" in text
+    assert "FREE_PROVIDER_FOOTBALL_LEAGUES: ${FREE_PROVIDER_FOOTBALL_LEAGUES:-" in text
+    assert "bra.2,arg.1}" in text
 
 
 def test_logging_redacts_telegram_bot_token() -> None:

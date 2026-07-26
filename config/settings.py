@@ -32,6 +32,9 @@ DEFAULT_FREE_FOOTBALL_LEAGUES = [
     "mex.1",
     "por.1",
     "ned.1",
+    "bra.1",
+    "bra.2",
+    "arg.1",
 ]
 
 
