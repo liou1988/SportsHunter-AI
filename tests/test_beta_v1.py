@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -12,11 +14,13 @@ from database.base import Base
 from database.models import OddsSnapshot
 from database.repositories import SportsRepository
 from datahub.hub import DataHub
+from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Team
 from datahub.providers.mock import MockProvider
 from data_sync.models import SyncSummary
 from core.risk.models import RiskBreakdown, RiskReason
 from free_provider.football import FreeFootballProvider
 from api.routers import provider as provider_router
+from api.routers import recommendations as recommendations_router
 from scheduler import jobs
 
 
@@ -91,6 +95,37 @@ def test_api_health() -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["app"] == "SportsHunter-AI"
+
+
+def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:
+    app.dependency_overrides[recommendations_router.get_prediction_pipeline] = lambda: _fake_recommendation_pipeline()
+    try:
+        client = TestClient(app)
+        response = client.get("/api/recommendations/today")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert [item["signal"] for item in payload["items"]] == ["STRONG_BUY", "BUY"]
+    assert [item["hunter_score"] for item in payload["items"]] == [91.0, 88.0]
+    assert payload["items"][0]["stake"] == "2U"
+    assert payload["items"][0]["odds"]["bookmaker"] == "DebugBook"
+
+
+def test_recommendations_today_can_include_pass() -> None:
+    app.dependency_overrides[recommendations_router.get_prediction_pipeline] = lambda: _fake_recommendation_pipeline()
+    try:
+        client = TestClient(app)
+        response = client.get("/api/recommendations/today?include_pass=true")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 3
+    assert [item["signal"] for item in payload["items"]] == ["STRONG_BUY", "BUY", "PASS"]
 
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
@@ -311,3 +346,56 @@ def _scoreboard_payload(league_id: str, event_ids: list[str]) -> dict:
             for event_id in event_ids
         ],
     }
+
+
+def _fake_recommendation_pipeline():
+    league = League(id="debug-league", name="Debug League", provider="mock")
+    home = Team(id="home", name="Debug Home", provider="mock")
+    away = Team(id="away", name="Debug Away", provider="mock")
+
+    def fixture(fixture_id: str) -> Fixture:
+        return Fixture(
+            id=fixture_id,
+            league=league,
+            home_team=home,
+            away_team=away,
+            start_time=datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc),
+            status=FixtureStatus.SCHEDULED,
+            score=Score(),
+            provider="mock",
+        )
+
+    class FakeDataHub:
+        def get_odds(self, fixture_id: str) -> list[Odds]:
+            return [
+                Odds(
+                    fixture_id=fixture_id,
+                    market=OddsMarket.EUROPEAN,
+                    bookmaker="DebugBook",
+                    home=1.80,
+                    draw=3.50,
+                    away=4.50,
+                    provider="mock",
+                )
+            ]
+
+    class FakePipeline:
+        context = SimpleNamespace(datahub=FakeDataHub())
+
+        def run_today(self) -> list:
+            return [
+                _fake_prediction_result(fixture("buy"), 88.0, "BUY", 1.5),
+                _fake_prediction_result(fixture("pass"), 77.0, "PASS", 0),
+                _fake_prediction_result(fixture("strong"), 91.0, "STRONG_BUY", 2),
+            ]
+
+    return FakePipeline()
+
+
+def _fake_prediction_result(fixture: Fixture, score: float, signal: str, stake: float):
+    return SimpleNamespace(
+        fixture=fixture,
+        hunter_score=SimpleNamespace(score=score, confidence=0.91),
+        signal=SimpleNamespace(signal=SimpleNamespace(value=signal), stake=stake, reason=f"{signal} reason"),
+        predicted_side=fixture.home_team.name if stake else None,
+    )
