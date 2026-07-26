@@ -4,7 +4,7 @@ SportsHunter-AI is a professional sports match prediction system built with
 FastAPI, SQLAlchemy, Alembic, APScheduler, Provider-based data collection,
 rule-based Hunter Rating, Risk, Signal, Evaluation, and Automation engines.
 
-Beta v1.0.1 requires **Python >=3.12** and defaults to the free ESPN public
+Beta v1.0.1 requires **Python >=3.12** and defaults to a multi-source free
 football provider.
 
 ## Docker one-command deploy
@@ -50,7 +50,21 @@ FOOTBALL_DATA_SEASON=2026
 ```
 
 The free provider returns real football fixtures, live scores and basic
-statistics when available. It does not fake unavailable odds.
+statistics when available. It combines ESPN public football feeds with
+TheSportsDB's free day-event feed, aggregates all configured leagues, de-duplicates
+cross-source matches, and does not fake unavailable odds.
+
+Useful provider controls:
+
+```env
+FREE_PROVIDER_SOURCES=espn,thesportsdb
+FREE_PROVIDER_FOOTBALL_LEAGUES=eng.1,eng.2,esp.1,ger.1,bra.2,arg.2,club.friendly,...
+```
+
+Provider diagnostics:
+
+- `GET /api/provider/debug` shows checked sources, league counts, skipped ESPN
+  slugs, raw fixture count and parsed fixture count.
 
 ## Directories
 

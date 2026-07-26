@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -27,10 +29,52 @@ logger = logging.getLogger(__name__)
 
 LEAGUE_NAMES = {
     "eng.1": "English Premier League",
+    "eng.2": "English League Championship",
+    "eng.3": "English League One",
+    "eng.4": "English League Two",
+    "eng.5": "English National League",
+    "eng.fa": "English FA Cup",
+    "eng.fa_qual": "English FA Cup Qualifying",
+    "eng.league_cup": "English Carabao Cup",
+    "eng.trophy": "English EFL Trophy",
+    "eng.charity": "English FA Community Shield",
     "esp.1": "Spanish LaLiga",
+    "esp.2": "Spanish LaLiga 2",
+    "esp.copa_del_rey": "Spanish Copa del Rey",
+    "esp.super_cup": "Spanish Super Cup",
     "ita.1": "Italian Serie A",
+    "ita.2": "Italian Serie B",
+    "ita.coppa_italia": "Italian Coppa Italia",
+    "ita.super_cup": "Italian Super Cup",
     "ger.1": "German Bundesliga",
+    "ger.2": "German 2. Bundesliga",
+    "ger.dfb_pokal": "German DFB Pokal",
+    "ger.super_cup": "German Super Cup",
     "fra.1": "French Ligue 1",
+    "fra.2": "French Ligue 2",
+    "fra.coupe_de_france": "French Coupe de France",
+    "fra.super_cup": "French Super Cup",
+    "por.1": "Portuguese Primeira Liga",
+    "por.taca.portugal": "Portuguese Taca de Portugal",
+    "ned.1": "Dutch Eredivisie",
+    "ned.2": "Dutch Keuken Kampioen Divisie",
+    "ned.cup": "Dutch KNVB Cup",
+    "ned.supercup": "Dutch Johan Cruyff Shield",
+    "sco.1": "Scottish Premiership",
+    "sco.2": "Scottish Championship",
+    "sco.tennents": "Scottish Cup",
+    "sco.cis": "Scottish League Cup",
+    "sco.challenge": "Scottish Challenge Cup",
+    "bel.1": "Belgian Pro League",
+    "sui.1": "Swiss Super League",
+    "aut.1": "Austrian Bundesliga",
+    "den.1": "Danish Superliga",
+    "nor.1": "Norwegian Eliteserien",
+    "swe.1": "Swedish Allsvenskan",
+    "pol.1": "Polish Ekstraklasa",
+    "tur.1": "Turkish Super Lig",
+    "gre.1": "Greek Super League",
+    "rus.1": "Russian Premier League",
     "uefa.champions": "UEFA Champions League",
     "uefa.champions_qual": "UEFA Champions League Qualifying",
     "uefa.europa": "UEFA Europa League",
@@ -42,24 +86,86 @@ LEAGUE_NAMES = {
     "uefa.euro": "UEFA European Championship",
     "uefa.euroq": "UEFA European Championship Qualifying",
     "fifa.world": "FIFA World Cup",
+    "fifa.wwc": "FIFA Women's World Cup",
+    "fifa.cwc": "FIFA Club World Cup",
     "fifa.worldq.uefa": "FIFA World Cup Qualifying - UEFA",
+    "fifa.worldq.conmebol": "FIFA World Cup Qualifying - CONMEBOL",
+    "fifa.worldq.concacaf": "FIFA World Cup Qualifying - Concacaf",
+    "fifa.worldq.afc": "FIFA World Cup Qualifying - AFC",
+    "fifa.worldq.caf": "FIFA World Cup Qualifying - CAF",
+    "fifa.worldq.ofc": "FIFA World Cup Qualifying - OFC",
     "fifa.friendly": "International Friendly",
+    "fifa.friendly.w": "Women's International Friendly",
     "fifa.friendly_u21": "International Friendly U21",
+    "fifa.world.u20": "FIFA Under-20 World Cup",
+    "fifa.world.u17": "FIFA Under-17 World Cup",
+    "club.friendly": "Club Friendly",
+    "nonfifa": "Non-FIFA Friendly",
+    "conmebol.libertadores": "CONMEBOL Libertadores",
+    "conmebol.sudamericana": "CONMEBOL Sudamericana",
+    "conmebol.america": "Copa America",
+    "concacaf.champions": "Concacaf Champions Cup",
+    "concacaf.champions_cup": "Concacaf Champions Cup",
+    "concacaf.gold": "Concacaf Gold Cup",
+    "concacaf.nations.league": "Concacaf Nations League",
+    "afc.champions": "AFC Champions League Elite",
+    "afc.cup": "AFC Cup",
+    "afc.asian.cup": "AFC Asian Cup",
+    "aff.championship": "ASEAN Championship",
+    "caf.champions": "CAF Champions League",
+    "caf.confed": "CAF Confederation Cup",
+    "caf.w.nations": "Women's Africa Cup of Nations",
     "usa.1": "Major League Soccer",
+    "usa.nwsl": "NWSL",
+    "usa.open": "U.S. Open Cup",
+    "usa.usl.1": "USL Championship",
+    "usa.usl.l1": "USL League One",
     "mex.1": "Liga MX",
     "mex.2": "Liga de Expansion MX",
-    "por.1": "Portuguese Primeira Liga",
-    "ned.1": "Dutch Eredivisie",
     "kor.1": "K League 1",
     "kor.2": "K League 2",
     "jpn.1": "Japanese J.League",
     "jpn.2": "Japanese J2 League",
     "aus.1": "Australian A-League Men",
+    "chn.1": "Chinese Super League",
+    "idn.1": "Indonesian Super League",
+    "tha.1": "Thai League 1",
+    "sgp.1": "Singaporean Premier League",
+    "ind.1": "Indian Super League",
+    "ind.2": "Indian I-League",
+    "ksa.1": "Saudi Pro League",
+    "isr.1": "Israeli Premier League",
+    "rsa.1": "South African Premiership",
     "bra.1": "Brazilian Serie A",
     "bra.2": "Brazilian Serie B",
+    "bra.copa_do_brazil": "Copa do Brasil",
+    "bra.camp.carioca": "Brazilian Campeonato Carioca",
+    "bra.camp.paulista": "Brazilian Campeonato Paulista",
+    "bra.camp.gaucho": "Brazilian Campeonato Gaucho",
+    "bra.camp.mineiro": "Brazilian Campeonato Mineiro",
     "arg.1": "Argentine Liga Profesional de Futbol",
     "arg.2": "Argentine Primera Nacional",
+    "arg.3": "Argentine Primera B",
+    "arg.copa": "Copa Argentina",
+    "col.1": "Colombian Primera A",
+    "col.copa": "Copa Colombia",
+    "ecu.1": "LigaPro Ecuador",
+    "per.1": "Peruvian Liga 1",
+    "uru.1": "Uruguayan Primera Division",
+    "uru.2": "Uruguayan Segunda Division",
+    "chi.1": "Chilean Primera Division",
+    "par.1": "Paraguayan Primera Division",
+    "bol.1": "Bolivian Liga Profesional",
+    "ven.1": "Venezuelan Primera Division",
+    "hon.1": "Honduran Liga Nacional",
+    "crc.1": "Costa Rican Primera Division",
+    "gua.1": "Guatemalan Liga Nacional",
+    "slv.1": "Salvadoran Primera Division",
 }
+
+
+ESPN_UNSUPPORTED_LEAGUES = {"kor.1", "kor.2", "jpn.2", "pol.1"}
+THESPORTSDB_SOURCE = "thesportsdb"
 
 
 class FreeFootballProvider(BaseProvider):
@@ -68,14 +174,20 @@ class FreeFootballProvider(BaseProvider):
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
         self.client = HttpJsonClient(settings, settings.free_provider_base_url)
+        self.thesportsdb_client = HttpJsonClient(settings, settings.free_provider_thesportsdb_base_url)
 
     def get_today_fixtures(self) -> list[Fixture]:
         return self.cached("free:today", self._get_today_fixtures, ttl_seconds=120)
 
     def debug_today(self) -> dict:
         tz = ZoneInfo(self.settings.timezone)
-        today = datetime.now(tz).strftime("%Y%m%d")
-        leagues_checked = self._configured_leagues()
+        now = datetime.now(tz)
+        today = now.strftime("%Y%m%d")
+        today_iso = now.strftime("%Y-%m-%d")
+        sources_checked = self._configured_sources()
+        leagues_configured = self._configured_leagues()
+        leagues_checked = self._configured_espn_leagues()
+        leagues_skipped = [league for league in leagues_configured if league not in leagues_checked]
         request_url = ""
         request_urls: list[str] = []
         errors: list[str] = []
@@ -84,34 +196,60 @@ class FreeFootballProvider(BaseProvider):
         fixtures_raw = 0
         fixtures_parsed = 0
         fixtures_per_league: dict[str, int] = {}
+        fixtures_per_source: dict[str, int] = {}
         parsed_fixtures: list[Fixture] = []
         first_fixture: dict = {}
 
         with httpx.Client(timeout=self.settings.provider_timeout_seconds, follow_redirects=True) as client:
-            for league_id in leagues_checked:
-                path = self._scoreboard_path(league_id)
-                url = f"{self.settings.free_provider_base_url.rstrip('/')}{path}"
+            if "espn" in sources_checked:
+                for league_id in leagues_checked:
+                    path = self._scoreboard_path(league_id)
+                    url = f"{self.settings.free_provider_base_url.rstrip('/')}{path}"
+                    try:
+                        response = client.get(
+                            url,
+                            params={"dates": today},
+                        )
+                        response_url = str(response.url)
+                        request_urls.append(response_url)
+                        if not request_url:
+                            request_url = response_url
+                        http_statuses[f"espn:{league_id}"] = response.status_code
+                        payload = response.json()
+                        events = payload.get("events", []) or []
+                        parsed = self._parse_scoreboard(league_id, payload)
+                        fixtures_raw += len(events)
+                        fixtures_per_league[league_id] = len(parsed)
+                        fixtures_per_source["espn"] = fixtures_per_source.get("espn", 0) + len(parsed)
+                        parsed_fixtures.extend(parsed)
+                    except Exception as exc:  # noqa: BLE001 - debug endpoint must report provider failures
+                        logger.error("free provider debug request failed", extra={"source": "espn", "league": league_id}, exc_info=exc)
+                        fixtures_per_league.setdefault(league_id, 0)
+                        http_statuses.setdefault(f"espn:{league_id}", None)
+                        errors.append(f"espn:{league_id}: {exc}")
+
+            if THESPORTSDB_SOURCE in sources_checked:
+                url = f"{self.settings.free_provider_thesportsdb_base_url.rstrip('/')}/eventsday.php"
                 try:
-                    response = client.get(
-                        url,
-                        params={"dates": today},
-                    )
+                    response = client.get(url, params={"d": today_iso, "s": "Soccer"})
                     response_url = str(response.url)
                     request_urls.append(response_url)
                     if not request_url:
                         request_url = response_url
-                    http_statuses[league_id] = response.status_code
+                    http_statuses["thesportsdb:eventsday"] = response.status_code
                     payload = response.json()
                     events = payload.get("events", []) or []
-                    parsed = self._parse_scoreboard(league_id, payload)
+                    parsed = self._parse_thesportsdb_events(payload)
                     fixtures_raw += len(events)
-                    fixtures_per_league[league_id] = len(parsed)
+                    fixtures_per_source[THESPORTSDB_SOURCE] = len(parsed)
+                    for league_key, count in self._fixtures_per_league(parsed).items():
+                        fixtures_per_league[league_key] = fixtures_per_league.get(league_key, 0) + count
                     parsed_fixtures.extend(parsed)
                 except Exception as exc:  # noqa: BLE001 - debug endpoint must report provider failures
-                    logger.error("free provider debug request failed", extra={"league": league_id}, exc_info=exc)
-                    fixtures_per_league.setdefault(league_id, 0)
-                    http_statuses.setdefault(league_id, None)
-                    errors.append(f"{league_id}: {exc}")
+                    logger.error("free provider debug request failed", extra={"source": THESPORTSDB_SOURCE}, exc_info=exc)
+                    fixtures_per_source.setdefault(THESPORTSDB_SOURCE, 0)
+                    http_statuses.setdefault("thesportsdb:eventsday", None)
+                    errors.append(f"thesportsdb:eventsday: {exc}")
 
         deduped = self._dedupe_fixtures(parsed_fixtures)
         fixtures_parsed = len(deduped)
@@ -126,15 +264,20 @@ class FreeFootballProvider(BaseProvider):
 
         return {
             "provider": self.name,
-            "source": self.settings.football_data_source,
+            "source": ",".join(sources_checked),
             "timezone": self.settings.timezone,
             "today": today,
+            "today_iso": today_iso,
             "request_url": request_url,
             "request_urls": request_urls,
             "http_status": http_status,
             "http_statuses": http_statuses,
+            "sources_checked": sources_checked,
+            "leagues_configured": leagues_configured,
             "leagues_checked": leagues_checked,
+            "leagues_skipped": leagues_skipped,
             "fixtures_per_league": fixtures_per_league,
+            "fixtures_per_source": fixtures_per_source,
             "fixtures_raw": fixtures_raw,
             "fixtures_parsed": fixtures_parsed,
             "first_fixture": first_fixture,
@@ -144,21 +287,27 @@ class FreeFootballProvider(BaseProvider):
     def _get_today_fixtures(self) -> list[Fixture]:
         tz = ZoneInfo(self.settings.timezone)
         date_key = datetime.now(tz).strftime("%Y%m%d")
+        date_iso = datetime.now(tz).strftime("%Y-%m-%d")
         fixtures: list[Fixture] = []
         failures: list[str] = []
-        for league_id in self._configured_leagues():
+        sources = self._configured_sources()
+
+        if "espn" in sources:
+            fixtures.extend(self._get_espn_today_fixtures(date_key, failures))
+
+        if THESPORTSDB_SOURCE in sources:
             try:
                 payload = self.retry(
-                    f"scoreboard:{league_id}",
-                    lambda league_id=league_id: self.client.get_json(
-                        self._scoreboard_path(league_id),
-                        params={"dates": date_key},
+                    "thesportsdb:eventsday",
+                    lambda: self.thesportsdb_client.get_json(
+                        "/eventsday.php",
+                        params={"d": date_iso, "s": "Soccer"},
                     ),
                 )
-                fixtures.extend(self._parse_scoreboard(league_id, payload))
+                fixtures.extend(self._parse_thesportsdb_events(payload))
             except Exception as exc:  # noqa: BLE001
-                logger.error("free provider scoreboard failed", extra={"league": league_id}, exc_info=exc)
-                failures.append(f"{league_id}: {exc}")
+                logger.error("free provider eventsday failed", extra={"source": THESPORTSDB_SOURCE}, exc_info=exc)
+                failures.append(f"thesportsdb:eventsday: {exc}")
         if not fixtures and failures:
             raise ProviderUnavailableError(self.name, "; ".join(failures))
         return self._dedupe_fixtures(fixtures)
@@ -167,13 +316,27 @@ class FreeFootballProvider(BaseProvider):
         for fixture in self.get_today_fixtures():
             if fixture.id == fixture_id:
                 return fixture
+        if fixture_id.startswith("tsdb:") and THESPORTSDB_SOURCE in self._configured_sources():
+            return self._get_thesportsdb_fixture(fixture_id)
         raise ProviderUnavailableError(self.name, f"fixture {fixture_id} not found in current free feed")
 
     def get_live_matches(self) -> list[Fixture]:
-        return [fixture for fixture in self.get_today_fixtures() if fixture.status == FixtureStatus.LIVE]
+        fixtures = [fixture for fixture in self.get_today_fixtures() if fixture.status == FixtureStatus.LIVE]
+        if THESPORTSDB_SOURCE in self._configured_sources():
+            try:
+                payload = self.retry(
+                    "thesportsdb:livescore",
+                    lambda: self.thesportsdb_client.get_json("/livescore.php", params={"s": "Soccer"}),
+                )
+                fixtures.extend(self._parse_thesportsdb_live(payload))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("free provider livescore failed", extra={"source": THESPORTSDB_SOURCE}, exc_info=exc)
+        return self._dedupe_fixtures(fixtures)
 
     def get_odds(self, fixture_id: str) -> list[Odds]:
         fixture = self.get_fixture(fixture_id)
+        if self._fixture_source(fixture) == THESPORTSDB_SOURCE:
+            return []
         league_id = fixture.league.id
         payload = self.retry(
             f"summary-odds:{fixture_id}",
@@ -205,6 +368,8 @@ class FreeFootballProvider(BaseProvider):
 
     def get_statistics(self, fixture_id: str) -> Statistics:
         fixture = self.get_fixture(fixture_id)
+        if self._fixture_source(fixture) == THESPORTSDB_SOURCE:
+            return self._get_thesportsdb_statistics(fixture)
         payload = self.retry(
             f"summary-statistics:{fixture_id}",
             lambda: self.client.get_json(
@@ -235,6 +400,8 @@ class FreeFootballProvider(BaseProvider):
         return stats
 
     def get_standings(self, league: str) -> list[Standing]:
+        if league.startswith("tsdb:"):
+            return self._get_thesportsdb_standings(league)
         payload = self.retry(
             f"standings:{league}",
             lambda: self.client.get_json(f"/apis/site/v2/sports/soccer/{league}/standings"),
@@ -260,6 +427,97 @@ class FreeFootballProvider(BaseProvider):
                         raw=entry,
                     )
                 )
+        return standings
+
+    def _get_espn_today_fixtures(self, date_key: str, failures: list[str]) -> list[Fixture]:
+        leagues = self._configured_espn_leagues()
+        if not leagues:
+            return []
+
+        fixtures_by_index: dict[int, list[Fixture]] = {}
+        workers = min(8, len(leagues))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(self._fetch_espn_scoreboard, league_id, date_key): (index, league_id)
+                for index, league_id in enumerate(leagues)
+            }
+            for future in as_completed(futures):
+                index, league_id = futures[future]
+                try:
+                    payload = future.result()
+                    fixtures_by_index[index] = self._parse_scoreboard(league_id, payload)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("free provider scoreboard failed", extra={"source": "espn", "league": league_id}, exc_info=exc)
+                    failures.append(f"espn:{league_id}: {exc}")
+
+        fixtures: list[Fixture] = []
+        for index in range(len(leagues)):
+            fixtures.extend(fixtures_by_index.get(index, []))
+        return fixtures
+
+    def _fetch_espn_scoreboard(self, league_id: str, date_key: str) -> dict:
+        return self.retry(
+            f"scoreboard:{league_id}",
+            lambda league_id=league_id: self.client.get_json(
+                self._scoreboard_path(league_id),
+                params={"dates": date_key},
+            ),
+        )
+
+    def _get_thesportsdb_fixture(self, fixture_id: str) -> Fixture:
+        event_id = fixture_id.removeprefix("tsdb:")
+        payload = self.retry(
+            f"thesportsdb:event:{event_id}",
+            lambda: self.thesportsdb_client.get_json("/lookupevent.php", params={"id": event_id}),
+        )
+        fixtures = self._parse_thesportsdb_events(payload)
+        if fixtures:
+            return fixtures[0]
+        raise ProviderUnavailableError(self.name, f"TheSportsDB fixture {fixture_id} not found")
+
+    def _get_thesportsdb_statistics(self, fixture: Fixture) -> Statistics:
+        event_id = fixture.id.removeprefix("tsdb:")
+        try:
+            payload = self.retry(
+                f"thesportsdb:statistics:{event_id}",
+                lambda: self.thesportsdb_client.get_json("/lookupevent.php", params={"id": event_id}),
+            )
+        except Exception:
+            payload = {"events": [fixture.raw.get("event", fixture.raw)]}
+        event = (payload.get("events") or [fixture.raw.get("event", fixture.raw)])[0]
+        return Statistics(
+            fixture_id=fixture.id,
+            provider=self.name,
+            raw={"source": THESPORTSDB_SOURCE, "event": event},
+        )
+
+    def _get_thesportsdb_standings(self, league: str) -> list[Standing]:
+        league_id = league.removeprefix("tsdb:")
+        season = str(self.settings.football_data_season or datetime.now(timezone.utc).year)
+        payload = self.retry(
+            f"thesportsdb:standings:{league_id}",
+            lambda: self.thesportsdb_client.get_json("/lookuptable.php", params={"l": league_id, "s": season}),
+        )
+        standings: list[Standing] = []
+        for entry in payload.get("table", []) or []:
+            standings.append(
+                Standing(
+                    league_id=league,
+                    team=Team(
+                        id=str(entry.get("idTeam") or entry.get("strTeam") or "unknown"),
+                        name=str(entry.get("strTeam") or "Unknown Team"),
+                        provider=self.name,
+                    ),
+                    rank=self._safe_int(entry.get("intRank")),
+                    points=self._safe_int(entry.get("intPoints")),
+                    played=self._safe_int(entry.get("intPlayed")),
+                    wins=self._safe_int(entry.get("intWin")),
+                    draws=self._safe_int(entry.get("intDraw")),
+                    losses=self._safe_int(entry.get("intLoss")),
+                    provider=self.name,
+                    raw={"source": THESPORTSDB_SOURCE, "standing": entry},
+                )
+            )
         return standings
 
     def _parse_scoreboard(self, league_id: str, payload: dict) -> list[Fixture]:
@@ -299,6 +557,70 @@ class FreeFootballProvider(BaseProvider):
             )
         return fixtures
 
+    def _parse_thesportsdb_events(self, payload: dict) -> list[Fixture]:
+        fixtures: list[Fixture] = []
+        for event in payload.get("events", []) or []:
+            fixture = self._parse_thesportsdb_event(event)
+            if fixture is not None:
+                fixtures.append(fixture)
+        return fixtures
+
+    def _parse_thesportsdb_live(self, payload: dict) -> list[Fixture]:
+        fixtures: list[Fixture] = []
+        for event in payload.get("livescore", []) or []:
+            if str(event.get("strSport") or "").lower() != "soccer":
+                continue
+            fixture = self._parse_thesportsdb_event(event, default_status=FixtureStatus.LIVE)
+            if fixture is not None:
+                fixtures.append(fixture)
+        return fixtures
+
+    def _parse_thesportsdb_event(
+        self,
+        event: dict,
+        default_status: FixtureStatus = FixtureStatus.SCHEDULED,
+    ) -> Fixture | None:
+        event_id = event.get("idEvent")
+        home_name = event.get("strHomeTeam")
+        away_name = event.get("strAwayTeam")
+        if not event_id or not home_name or not away_name:
+            return None
+
+        league_id = str(event.get("idLeague") or event.get("strLeague") or "unknown")
+        league = League(
+            id=f"tsdb:{league_id}",
+            name=str(event.get("strLeague") or f"TheSportsDB {league_id}"),
+            sport="football",
+            provider=self.name,
+        )
+        return Fixture(
+            id=f"tsdb:{event_id}",
+            league=league,
+            home_team=Team(
+                id=str(event.get("idHomeTeam") or f"tsdb-home:{event_id}"),
+                name=str(home_name),
+                provider=self.name,
+            ),
+            away_team=Team(
+                id=str(event.get("idAwayTeam") or f"tsdb-away:{event_id}"),
+                name=str(away_name),
+                provider=self.name,
+            ),
+            start_time=self._parse_thesportsdb_datetime(event),
+            status=self._map_thesportsdb_status(event, default_status),
+            venue=event.get("strVenue"),
+            season=self._safe_int(event.get("strSeason")),
+            round_name=str(event.get("intRound") or "") or None,
+            score=Score(
+                home=self._safe_int(event.get("intHomeScore")),
+                away=self._safe_int(event.get("intAwayScore")),
+                period=event.get("strStatus"),
+                clock=str(event.get("strProgress") or "") or None,
+            ),
+            provider=self.name,
+            raw={"source": THESPORTSDB_SOURCE, "event": event},
+        )
+
     def _parse_team(self, payload: dict) -> Team:
         return Team(
             id=str(payload.get("id") or payload.get("uid") or payload.get("abbreviation") or payload.get("name")),
@@ -317,24 +639,92 @@ class FreeFootballProvider(BaseProvider):
                 leagues.append(normalized)
         return leagues or ["eng.1"]
 
+    def _configured_espn_leagues(self) -> list[str]:
+        return [league for league in self._configured_leagues() if self._espn_league_supported(league)]
+
+    def _configured_sources(self) -> list[str]:
+        seen: set[str] = set()
+        sources: list[str] = []
+        for source in self.settings.free_provider_sources or ["espn"]:
+            normalized = str(source).strip().lower().replace("_", "").replace("-", "")
+            if normalized in {"sportsdb", "thesportsdb", "tsdb"}:
+                normalized = THESPORTSDB_SOURCE
+            if normalized in {"espn", THESPORTSDB_SOURCE} and normalized not in seen:
+                seen.add(normalized)
+                sources.append(normalized)
+        return sources or ["espn"]
+
+    @staticmethod
+    def _espn_league_supported(league_id: str) -> bool:
+        return league_id not in ESPN_UNSUPPORTED_LEAGUES
+
     @staticmethod
     def _scoreboard_path(league_id: str) -> str:
         return f"/apis/site/v2/sports/soccer/{league_id}/scoreboard"
 
     @staticmethod
     def _dedupe_fixtures(fixtures: list[Fixture]) -> list[Fixture]:
-        deduped: dict[tuple[str, str], Fixture] = {}
+        deduped: list[Fixture] = []
+        seen_ids: set[tuple[str, str]] = set()
+        seen_matches: set[tuple[str, ...]] = set()
         for fixture in fixtures:
-            key = (fixture.provider, fixture.id)
-            if key not in deduped:
-                deduped[key] = fixture
-        return list(deduped.values())
+            id_key = (fixture.provider, fixture.id)
+            match_key = FreeFootballProvider._fixture_identity(fixture)
+            if id_key in seen_ids or match_key in seen_matches:
+                continue
+            seen_ids.add(id_key)
+            seen_matches.add(match_key)
+            deduped.append(fixture)
+        return deduped
+
+    @staticmethod
+    def _fixture_identity(fixture: Fixture) -> tuple[str, ...]:
+        home = FreeFootballProvider._normalize_identity(fixture.home_team.name)
+        away = FreeFootballProvider._normalize_identity(fixture.away_team.name)
+        if home and away:
+            kickoff = fixture.start_time.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+            return ("match", home, away, kickoff)
+        return ("id", fixture.provider, fixture.id)
+
+    @staticmethod
+    def _normalize_identity(value: str | None) -> str:
+        normalized = unicodedata.normalize("NFKD", value or "")
+        ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+        return "".join(char for char in ascii_name.casefold() if char.isalnum())
+
+    @staticmethod
+    def _fixtures_per_league(fixtures: list[Fixture]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for fixture in fixtures:
+            counts[fixture.league.id] = counts.get(fixture.league.id, 0) + 1
+        return counts
+
+    @staticmethod
+    def _fixture_source(fixture: Fixture) -> str:
+        source = fixture.raw.get("source") if isinstance(fixture.raw, dict) else None
+        return str(source or "espn")
 
     @staticmethod
     def _parse_datetime(value: str | None) -> datetime:
         if not value:
             return datetime.now(timezone.utc)
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    @staticmethod
+    def _parse_thesportsdb_datetime(event: dict) -> datetime:
+        timestamp = event.get("strTimestamp")
+        if timestamp:
+            parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+        date_value = str(event.get("dateEvent") or event.get("dateEventLocal") or "")
+        time_value = str(event.get("strTime") or event.get("strEventTime") or "00:00:00")
+        if not date_value:
+            return datetime.now(timezone.utc)
+        if len(time_value) == 5:
+            time_value = f"{time_value}:00"
+        parsed = datetime.fromisoformat(f"{date_value}T{time_value}")
+        return parsed.replace(tzinfo=timezone.utc)
 
     @staticmethod
     def _map_status(status_type: dict) -> FixtureStatus:
@@ -351,6 +741,20 @@ class FreeFootballProvider(BaseProvider):
         if state == "pre":
             return FixtureStatus.SCHEDULED
         return FixtureStatus.UNKNOWN
+
+    @staticmethod
+    def _map_thesportsdb_status(event: dict, default_status: FixtureStatus) -> FixtureStatus:
+        status = str(event.get("strStatus") or "").strip().lower()
+        progress = str(event.get("strProgress") or "").strip()
+        if "postpon" in status:
+            return FixtureStatus.POSTPONED
+        if "cancel" in status or "abandon" in status:
+            return FixtureStatus.CANCELLED
+        if status in {"ft", "aet", "match finished", "finished", "full time"}:
+            return FixtureStatus.FINISHED
+        if status in {"1h", "2h", "ht", "et", "pen", "live"} or progress:
+            return FixtureStatus.LIVE
+        return default_status
 
     @staticmethod
     def _safe_float(value: object) -> float | None:

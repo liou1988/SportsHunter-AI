@@ -74,12 +74,38 @@ def test_settings_parse_telegram_env_aliases(monkeypatch) -> None:
     assert settings.telegram_effective_chat_id == "chat-value"
 
 
+def test_settings_parse_free_provider_sources(monkeypatch) -> None:
+    monkeypatch.setenv("FREE_PROVIDER_SOURCES", "espn,thesportsdb")
+    settings = Settings(_env_file=None)
+    assert settings.free_provider_sources == ["espn", "thesportsdb"]
+
+
 def test_env_example_defaults_to_free_provider() -> None:
     text = Path(".env.example").read_text(encoding="utf-8")
     assert "DATA_PROVIDER=free" in text
     assert "FOOTBALL_DATA_SOURCE=free" in text
     assert "FOOTBALL_DATA_SEASON=2026" in text
-    for league_id in ["kor.1", "kor.2", "jpn.1", "jpn.2", "aus.1", "bra.2", "arg.1", "usa.1", "mex.1", "uefa.europa.conf", "fifa.friendly"]:
+    assert "FREE_PROVIDER_SOURCES=espn,thesportsdb" in text
+    assert "FREE_PROVIDER_THESPORTSDB_BASE_URL=https://www.thesportsdb.com/api/v1/json/3" in text
+    for league_id in [
+        "kor.1",
+        "kor.2",
+        "jpn.1",
+        "jpn.2",
+        "aus.1",
+        "bra.2",
+        "arg.1",
+        "usa.1",
+        "usa.usl.1",
+        "mex.1",
+        "uefa.europa.conf",
+        "fifa.friendly",
+        "club.friendly",
+        "aff.championship",
+        "caf.w.nations",
+        "ecu.1",
+        "bol.1",
+    ]:
         assert league_id in text
 
 
@@ -103,7 +129,14 @@ def test_settings_default_free_leagues_include_requested_regions() -> None:
         "uefa.europa.conf",
         "uefa.super_cup",
         "fifa.friendly",
+        "club.friendly",
+        "aff.championship",
+        "caf.w.nations",
+        "ecu.1",
+        "bol.1",
+        "usa.usl.1",
     }
+    assert settings.free_provider_sources == ["espn", "thesportsdb"]
     assert expected_leagues.issubset(set(settings.free_provider_football_leagues))
     assert expected_leagues.issubset(set(LEAGUE_NAMES))
 
@@ -123,8 +156,28 @@ def test_docker_compose_allows_free_provider_leagues_env_override() -> None:
     assert "DATA_PROVIDER: ${DATA_PROVIDER:-free}" in text
     assert "FOOTBALL_DATA_SOURCE: ${FOOTBALL_DATA_SOURCE:-free}" in text
     assert "FOOTBALL_DATA_SEASON: ${FOOTBALL_DATA_SEASON:-2026}" in text
+    assert "FREE_PROVIDER_SOURCES: ${FREE_PROVIDER_SOURCES:-espn,thesportsdb}" in text
+    assert "FREE_PROVIDER_THESPORTSDB_BASE_URL: ${FREE_PROVIDER_THESPORTSDB_BASE_URL:-https://www.thesportsdb.com/api/v1/json/3}" in text
     assert "FREE_PROVIDER_FOOTBALL_LEAGUES: ${FREE_PROVIDER_FOOTBALL_LEAGUES:-" in text
-    for league_id in ["kor.1", "kor.2", "jpn.1", "jpn.2", "aus.1", "bra.2", "arg.2", "usa.1", "mex.2", "uefa.nations", "fifa.friendly"]:
+    for league_id in [
+        "kor.1",
+        "kor.2",
+        "jpn.1",
+        "jpn.2",
+        "aus.1",
+        "bra.2",
+        "arg.2",
+        "usa.1",
+        "usa.usl.1",
+        "mex.2",
+        "uefa.nations",
+        "fifa.friendly",
+        "club.friendly",
+        "aff.championship",
+        "caf.w.nations",
+        "ecu.1",
+        "bol.1",
+    ]:
         assert league_id in text
 
 
@@ -321,6 +374,19 @@ def test_telegram_localizes_current_fixture_team_names() -> None:
     assert translate_match_text("CRB vs Vila Nova") == "雷加塔斯巴西 对阵 维拉诺瓦"
 
 
+def test_telegram_localizes_expanded_fixture_team_names() -> None:
+    assert translate_team_name("Randers FC") == "兰讷斯"
+    assert translate_team_name("Silkeborg IF") == "锡尔克堡"
+    assert translate_team_name("Rosenborg") == "罗森博格"
+    assert translate_team_name("Fredrikstad") == "腓特烈斯塔"
+    assert translate_team_name("BK Häcken") == "赫根"
+    assert translate_team_name("Galatasaray") == "加拉塔萨雷"
+    assert translate_team_name("Timor-Leste") == "东帝汶"
+    assert translate_team_name("Universidad Católica (Quito)") == "基多天主教大学"
+    assert translate_team_name("Unión La Calera") == "拉卡莱拉联合"
+    assert translate_match_text("Stabæk vs Hødd") == "斯塔贝克 对阵 霍德"
+
+
 def test_telegram_fixtures_message_formats_real_fixtures() -> None:
     league = League(id="bra.2", name="Brazilian Serie B", provider="free")
     fixture = Fixture(
@@ -496,7 +562,12 @@ def test_free_provider_debug_parses_raw_scoreboard(monkeypatch) -> None:
             return FakeResponse()
 
     monkeypatch.setattr("free_provider.football.httpx.Client", FakeClient)
-    settings = Settings(data_provider="free", free_provider_football_leagues=["eng.1"], _env_file=None)
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["espn"],
+        free_provider_football_leagues=["eng.1"],
+        _env_file=None,
+    )
     debug = FreeFootballProvider(settings).debug_today()
     assert debug["provider"] == "free"
     assert debug["http_status"] == 200
@@ -542,6 +613,7 @@ def test_free_provider_debug_checks_multiple_leagues(monkeypatch) -> None:
     monkeypatch.setattr("free_provider.football.httpx.Client", FakeClient)
     settings = Settings(
         data_provider="free",
+        free_provider_sources=["espn"],
         free_provider_football_leagues=["eng.1", "esp.1", "ger.1"],
         _env_file=None,
     )
@@ -568,6 +640,7 @@ def test_free_provider_today_aggregates_leagues_and_deduplicates() -> None:
 
     settings = Settings(
         data_provider="free",
+        free_provider_sources=["espn"],
         free_provider_football_leagues=["eng.1", "esp.1", "ger.1", "esp.1"],
         _env_file=None,
     )
@@ -576,6 +649,115 @@ def test_free_provider_today_aggregates_leagues_and_deduplicates() -> None:
     fixtures = provider.get_today_fixtures()
     assert [fixture.id for fixture in fixtures] == ["800", "801"]
     assert {fixture.league.id for fixture in fixtures} == {"esp.1"}
+
+
+def test_free_provider_today_aggregates_supplemental_sources_and_deduplicates() -> None:
+    class FakeEspnClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            return _scoreboard_payload("eng.1", ["900"])
+
+    class FakeTheSportsDbClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            return _thesportsdb_events_payload(
+                [
+                    {
+                        "idEvent": "tsdb-duplicate",
+                        "strHomeTeam": "eng.1 Home 900",
+                        "strAwayTeam": "eng.1 Away 900",
+                        "strTimestamp": "2026-07-26T12:00:00",
+                    },
+                    {
+                        "idEvent": "tsdb-new",
+                        "strHomeTeam": "Rosenborg",
+                        "strAwayTeam": "Fredrikstad",
+                        "strTimestamp": "2026-07-26T17:00:00",
+                    },
+                ]
+            )
+
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["espn", "thesportsdb"],
+        free_provider_football_leagues=["eng.1"],
+        _env_file=None,
+    )
+    provider = FreeFootballProvider(settings)
+    provider.client = FakeEspnClient()
+    provider.thesportsdb_client = FakeTheSportsDbClient()
+
+    fixtures = provider.get_today_fixtures()
+
+    assert [fixture.id for fixture in fixtures] == ["900", "tsdb:tsdb-new"]
+    assert fixtures[1].league.id == "tsdb:4358"
+    assert fixtures[1].raw["source"] == "thesportsdb"
+
+
+def test_free_provider_live_uses_thesportsdb_livescore() -> None:
+    class FakeTheSportsDbClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            if path == "/eventsday.php":
+                return {"events": []}
+            return _thesportsdb_live_payload()
+
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["thesportsdb"],
+        _env_file=None,
+    )
+    provider = FreeFootballProvider(settings)
+    provider.thesportsdb_client = FakeTheSportsDbClient()
+
+    fixtures = provider.get_live_matches()
+
+    assert len(fixtures) == 1
+    assert fixtures[0].id == "tsdb:live-1"
+    assert fixtures[0].status == FixtureStatus.LIVE
+    assert fixtures[0].score.home == 1
+    assert fixtures[0].score.away == 0
+
+
+def test_free_provider_debug_reports_multiple_sources(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, url: str, payload: dict) -> None:
+            self.url = url
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, url: str, *args, **kwargs) -> FakeResponse:
+            if "eventsday.php" in url:
+                return FakeResponse(url, _thesportsdb_events_payload([{"idEvent": "tsdb-1"}]))
+            return FakeResponse(url, _scoreboard_payload("eng.1", ["901"]))
+
+    monkeypatch.setattr("free_provider.football.httpx.Client", FakeClient)
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["espn", "thesportsdb"],
+        free_provider_football_leagues=["eng.1", "kor.1"],
+        _env_file=None,
+    )
+    debug = FreeFootballProvider(settings).debug_today()
+
+    assert debug["sources_checked"] == ["espn", "thesportsdb"]
+    assert debug["leagues_configured"] == ["eng.1", "kor.1"]
+    assert debug["leagues_checked"] == ["eng.1"]
+    assert debug["leagues_skipped"] == ["kor.1"]
+    assert debug["fixtures_per_source"] == {"espn": 1, "thesportsdb": 1}
+    assert debug["fixtures_raw"] == 2
+    assert debug["fixtures_parsed"] == 2
 
 
 def test_refresh_live_job_serializes_slots_dataclass(monkeypatch) -> None:
@@ -638,6 +820,53 @@ def _scoreboard_payload(league_id: str, event_ids: list[str]) -> dict:
             }
             for event_id in event_ids
         ],
+    }
+
+
+def _thesportsdb_events_payload(overrides: list[dict] | None = None) -> dict:
+    events = []
+    for index, override in enumerate(overrides or [{"idEvent": "tsdb-1"}], start=1):
+        event = {
+            "idEvent": f"tsdb-{index}",
+            "strSport": "Soccer",
+            "idLeague": "4358",
+            "strLeague": "Norwegian Eliteserien",
+            "strSeason": "2026",
+            "strHomeTeam": "Rosenborg",
+            "strAwayTeam": "Fredrikstad",
+            "idHomeTeam": "133990",
+            "idAwayTeam": "134749",
+            "intHomeScore": None,
+            "intAwayScore": None,
+            "intRound": "15",
+            "strTimestamp": "2026-07-26T17:00:00",
+            "strStatus": "",
+            "strVenue": "Lerkendal Stadion",
+        }
+        event.update(override)
+        events.append(event)
+    return {"events": events}
+
+
+def _thesportsdb_live_payload() -> dict:
+    return {
+        "livescore": [
+            {
+                "idEvent": "live-1",
+                "strSport": "Soccer",
+                "idLeague": "4422",
+                "strLeague": "Polish Ekstraklasa",
+                "strHomeTeam": "Wisla Krakow",
+                "strAwayTeam": "GKS Katowice",
+                "idHomeTeam": "135303",
+                "idAwayTeam": "142467",
+                "intHomeScore": "1",
+                "intAwayScore": "0",
+                "strStatus": "1H",
+                "strProgress": "10",
+                "strTimestamp": "2026-07-26T18:15:00",
+            }
+        ]
     }
 
 

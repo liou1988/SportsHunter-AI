@@ -10,6 +10,7 @@ Useful endpoints:
 
 - `GET /api/health`
 - `GET /provider/status`
+- `GET /api/provider/debug`
 - `GET /api/matches/today`
 - `GET /api/predictions/today`
 - `GET /dashboard`
