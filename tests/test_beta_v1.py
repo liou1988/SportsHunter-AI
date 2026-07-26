@@ -19,7 +19,7 @@ from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Sco
 from datahub.providers.mock import MockProvider
 from data_sync.models import SyncSummary
 from core.risk.models import RiskBreakdown, RiskReason
-from free_provider.football import FreeFootballProvider
+from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
 from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
@@ -76,14 +76,33 @@ def test_env_example_defaults_to_free_provider() -> None:
     assert "DATA_PROVIDER=free" in text
     assert "FOOTBALL_DATA_SOURCE=free" in text
     assert "FOOTBALL_DATA_SEASON=2026" in text
-    assert "bra.2" in text
+    for league_id in ["kor.1", "kor.2", "jpn.1", "jpn.2", "aus.1", "bra.2", "arg.1", "usa.1", "mex.1", "uefa.europa.conf", "fifa.friendly"]:
+        assert league_id in text
 
 
-def test_settings_default_free_leagues_include_south_america() -> None:
+def test_settings_default_free_leagues_include_requested_regions() -> None:
     settings = Settings(_env_file=None)
-    assert "bra.1" in settings.free_provider_football_leagues
-    assert "bra.2" in settings.free_provider_football_leagues
-    assert "arg.1" in settings.free_provider_football_leagues
+    expected_leagues = {
+        "kor.1",
+        "kor.2",
+        "jpn.1",
+        "jpn.2",
+        "aus.1",
+        "bra.1",
+        "bra.2",
+        "arg.1",
+        "arg.2",
+        "usa.1",
+        "mex.1",
+        "mex.2",
+        "uefa.champions",
+        "uefa.europa",
+        "uefa.europa.conf",
+        "uefa.super_cup",
+        "fifa.friendly",
+    }
+    assert expected_leagues.issubset(set(settings.free_provider_football_leagues))
+    assert expected_leagues.issubset(set(LEAGUE_NAMES))
 
 
 def test_docker_compose_allows_telegram_env_override() -> None:
@@ -102,7 +121,8 @@ def test_docker_compose_allows_free_provider_leagues_env_override() -> None:
     assert "FOOTBALL_DATA_SOURCE: ${FOOTBALL_DATA_SOURCE:-free}" in text
     assert "FOOTBALL_DATA_SEASON: ${FOOTBALL_DATA_SEASON:-2026}" in text
     assert "FREE_PROVIDER_FOOTBALL_LEAGUES: ${FREE_PROVIDER_FOOTBALL_LEAGUES:-" in text
-    assert "bra.2,arg.1}" in text
+    for league_id in ["kor.1", "kor.2", "jpn.1", "jpn.2", "aus.1", "bra.2", "arg.2", "usa.1", "mex.2", "uefa.nations", "fifa.friendly"]:
+        assert league_id in text
 
 
 def test_logging_redacts_telegram_bot_token() -> None:
