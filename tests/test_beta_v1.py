@@ -12,6 +12,9 @@ from database.base import Base
 from database.models import OddsSnapshot
 from database.repositories import SportsRepository
 from datahub.providers.mock import MockProvider
+from data_sync.models import SyncSummary
+from core.risk.models import RiskBreakdown, RiskReason
+from scheduler import jobs
 
 
 def test_settings_accept_empty_football_season() -> None:
@@ -85,3 +88,23 @@ def test_api_health() -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["app"] == "SportsHunter-AI"
+
+
+def test_refresh_live_job_serializes_slots_dataclass(monkeypatch) -> None:
+    class FakeDataSync:
+        def sync_live(self) -> SyncSummary:
+            return SyncSummary(sync_type="live", provider="mock", synced_count=2).finish()
+
+    monkeypatch.setattr(jobs, "DataSync", FakeDataSync)
+    result = jobs.refresh_live()
+    assert result["sync_type"] == "live"
+    assert result["provider"] == "mock"
+    assert result["synced_count"] == 2
+    assert "started_at" in result
+
+
+def test_risk_breakdown_serializes_slots_dataclass() -> None:
+    breakdown = RiskBreakdown(items=[RiskReason(source="data_missing", score=14.0, reason="Data missing")])
+    assert breakdown.to_dict() == {
+        "items": [{"source": "data_missing", "score": 14.0, "reason": "Data missing"}]
+    }

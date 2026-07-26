@@ -1,24 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from automation.health import SystemHealthCheck
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
 
 
 def sync_today() -> dict:
-    return DataSync().sync_today().__dict__
+    return asdict(DataSync().sync_today())
 
 
 def update_odds() -> dict:
-    return DataSync().update_odds().__dict__
+    return asdict(DataSync().update_odds())
 
 
 def refresh_live() -> dict:
-    return DataSync().sync_live().__dict__
+    return asdict(DataSync().sync_live())
 
 
 def save_results() -> dict:
-    return DataSync().sync_history().__dict__
+    return asdict(DataSync().sync_history())
 
 
 def daily_report() -> str:

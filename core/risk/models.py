@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 
 
@@ -23,7 +23,7 @@ class RiskBreakdown:
     items: list[RiskReason]
 
     def to_dict(self) -> dict:
-        return {"items": [item.__dict__ for item in self.items]}
+        return {"items": [asdict(item) for item in self.items]}
 
 
 @dataclass(slots=True)
