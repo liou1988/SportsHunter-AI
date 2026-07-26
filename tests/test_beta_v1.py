@@ -77,6 +77,16 @@ def test_env_example_defaults_to_free_provider() -> None:
     assert "FOOTBALL_DATA_SEASON=2026" in text
 
 
+def test_docker_compose_allows_telegram_env_override() -> None:
+    text = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert "TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}" in text
+    assert "BOT_TOKEN: ${BOT_TOKEN:-}" in text
+    assert "CHAT_ID: ${CHAT_ID:-}" in text
+    assert "TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}" in text
+    assert "TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}" in text
+    assert "TELEGRAM_PUSH_ENABLED: ${TELEGRAM_PUSH_ENABLED:-false}" in text
+
+
 def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     results = mock_pipeline.run_today()
     assert len(results) == 1
