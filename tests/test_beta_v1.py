@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.main import app
 from config.settings import Settings
+from config.logging import SensitiveDataFilter
 from database.base import Base
 from database.models import OddsSnapshot
 from database.repositories import SportsRepository
@@ -85,6 +86,22 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}" in text
     assert "TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}" in text
     assert "TELEGRAM_PUSH_ENABLED: ${TELEGRAM_PUSH_ENABLED:-false}" in text
+
+
+def test_logging_redacts_telegram_bot_token() -> None:
+    import logging
+
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="POST %s",
+        args=("https://api.telegram.org/bot123456:ABC_def-GHI/sendMessage",),
+        exc_info=None,
+    )
+    assert SensitiveDataFilter().filter(record) is True
+    assert record.getMessage() == "POST https://api.telegram.org/bot<redacted>/sendMessage"
 
 
 def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:

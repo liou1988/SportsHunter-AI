@@ -1,9 +1,33 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
+from typing import Any
 
 from config.settings import Settings, get_settings
+
+
+TELEGRAM_BOT_TOKEN_PATTERN = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
+
+
+def _redact_sensitive_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return TELEGRAM_BOT_TOKEN_PATTERN.sub("bot<redacted>", value)
+    if isinstance(value, tuple):
+        return tuple(_redact_sensitive_value(item) for item in value)
+    if isinstance(value, list):
+        return [_redact_sensitive_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_sensitive_value(item) for key, item in value.items()}
+    return value
+
+
+class SensitiveDataFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _redact_sensitive_value(record.msg)
+        record.args = _redact_sensitive_value(record.args)
+        return True
 
 
 def configure_logging(settings: Settings | None = None) -> None:
@@ -11,9 +35,12 @@ def configure_logging(settings: Settings | None = None) -> None:
     settings.ensure_runtime_dirs()
 
     root = logging.getLogger()
+    sensitive_filter = SensitiveDataFilter()
     if root.handlers:
         for handler in root.handlers:
             handler.setLevel(settings.log_level.upper())
+            if not any(isinstance(item, SensitiveDataFilter) for item in handler.filters):
+                handler.addFilter(sensitive_filter)
         root.setLevel(settings.log_level.upper())
         return
 
@@ -24,9 +51,11 @@ def configure_logging(settings: Settings | None = None) -> None:
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(sensitive_filter)
 
     file_handler = logging.FileHandler(settings.log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(sensitive_filter)
 
     root.setLevel(settings.log_level.upper())
     root.addHandler(stream_handler)
