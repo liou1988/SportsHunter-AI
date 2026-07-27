@@ -451,10 +451,13 @@ def test_telegram_message_formats_recommendations() -> None:
     assert "推荐方向：戈亚尼亚竞技" in message
     assert "仓位：2U" in message
     assert "开赛时间：2026-07-26 20:00 北京时间" in message
+    assert "\n模型预测：" in message
     assert "比分预测：2-1" in message
     assert "大小球：大 2.5" in message
     assert "让球：戈亚尼亚竞技 -0.25" in message
     assert "水位 主" in message
+    assert "信号：推荐 | 猎手评分" not in message
+    assert "推荐方向：戈亚尼亚竞技 | 仓位" not in message
 
 
 def test_telegram_test_api_sends_test_message(monkeypatch) -> None:

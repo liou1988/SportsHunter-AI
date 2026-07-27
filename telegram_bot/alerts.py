@@ -20,7 +20,7 @@ from telegram_bot.localization import (
     translate_team_name,
 )
 from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
-from telegram_bot.recommendations import _send_with_result, format_market_prediction_lines
+from telegram_bot.recommendations import _send_with_result, format_market_prediction_lines, format_reason_lines
 
 logger = logging.getLogger(__name__)
 
@@ -232,29 +232,37 @@ def format_recommendation_alert_message(pipeline: PredictionPipeline, result: Pr
         f"联赛：{league}",
         f"开赛时间：{format_beijing_time(fixture.start_time)}",
         f"信号：{signal}",
-        f"猎手评分：{result.hunter_score.score} {result.hunter_score.grade}",
-        f"信心：{result.hunter_score.confidence}",
         f"推荐方向：{predicted_side}",
         f"仓位：{_format_stake(result.signal.stake)}",
+        f"评分：Hunter {result.hunter_score.score} {result.hunter_score.grade}",
+        f"信心：{result.hunter_score.confidence}",
+        "",
         *format_market_prediction_lines(result.market_prediction.to_dict()),
-        f"推荐理由：{result.signal.reason}",
+        "",
+        "推荐理由：",
+        *format_reason_lines(result.signal.reason),
     ]
-    odds_line = _format_odds_line(odds)
-    if odds_line:
-        lines.append(odds_line)
+    odds_lines = _format_odds_lines(odds)
+    if odds_lines:
+        lines.extend(["", *odds_lines])
     return "\n".join(lines)
 
 
-def _format_odds_line(odds: dict | list) -> str:
+def _format_odds_lines(odds: dict | list) -> list[str]:
     if not isinstance(odds, dict) or not odds:
-        return ""
+        return []
     home = odds.get("home")
     draw = odds.get("draw")
     away = odds.get("away")
     if home is None and draw is None and away is None:
-        return ""
+        return []
     bookmaker = odds.get("bookmaker") or odds.get("provider") or "-"
-    return f"赔率：{bookmaker} 主胜 {home or '-'} / 平 {draw or '-'} / 客胜 {away or '-'}"
+    return [
+        f"赔率：{bookmaker}",
+        f"  主胜：{home or '-'}",
+        f"  平局：{draw or '-'}",
+        f"  客胜：{away or '-'}",
+    ]
 
 
 def _fixture_odds(pipeline: PredictionPipeline, fixture_id: str) -> dict | list:
