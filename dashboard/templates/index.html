@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SportsHunter-AI Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/static/styles.css">
+</head>
+<body>
+  <main class="shell" id="dashboard-root">
+    <header class="topbar">
+      <div>
+        <h1>SportsHunter-AI</h1>
+        <p>预测运行、推荐归档和自动复盘控制台</p>
+      </div>
+      <div class="actions">
+        <button class="icon-button" id="refresh-button" type="button" title="刷新">↻</button>
+        <button class="text-button" id="evaluation-button" type="button">生成日报</button>
+        <button class="text-button" id="telegram-button" type="button">检查推送</button>
+      </div>
+    </header>
+
+    <section class="status-strip" aria-label="系统状态">
+      <div class="metric">
+        <span>Provider</span>
+        <strong id="provider-health">--</strong>
+      </div>
+      <div class="metric">
+        <span>已归档推荐</span>
+        <strong id="recommendation-count">--</strong>
+      </div>
+      <div class="metric">
+        <span>预测归档</span>
+        <strong id="prediction-count">--</strong>
+      </div>
+      <div class="metric">
+        <span>学习记录</span>
+        <strong id="learning-count">--</strong>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="panel span-2">
+        <div class="panel-head">
+          <h2>已归档推荐</h2>
+          <a href="/api/recommendations/today" target="_blank" rel="noreferrer">JSON</a>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>比赛</th>
+                <th>信号</th>
+                <th>评分</th>
+                <th>比分</th>
+                <th>大小球</th>
+                <th>让球</th>
+              </tr>
+            </thead>
+            <tbody id="recommendations-body">
+              <tr><td colspan="6">加载中</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Provider</h2>
+          <a href="/api/provider/debug" target="_blank" rel="noreferrer">Debug</a>
+        </div>
+        <dl class="details" id="provider-details"></dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>数据库</h2>
+        </div>
+        <dl class="details" id="database-details"></dl>
+      </div>
+
+      <div class="panel span-2">
+        <div class="panel-head">
+          <h2>最近归档</h2>
+        </div>
+        <div id="latest-predictions" class="list"></div>
+      </div>
+
+      <div class="panel span-2">
+        <div class="panel-head">
+          <h2>自动复盘</h2>
+          <a href="/api/dashboard/summary" target="_blank" rel="noreferrer">Summary</a>
+        </div>
+        <pre id="daily-report">暂无日报</pre>
+      </div>
+    </section>
+
+    <footer id="last-updated">等待刷新</footer>
+  </main>
+  <script src="/dashboard/static/app.js"></script>
+</body>
+</html>

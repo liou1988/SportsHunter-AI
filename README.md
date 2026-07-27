@@ -19,6 +19,7 @@ Open:
 - Swagger: http://localhost:8000/docs
 - Dashboard: http://localhost:8000/dashboard
 - Provider status: http://localhost:8000/provider/status
+- Dashboard summary API: http://localhost:8000/api/dashboard/summary
 
 Docker runs Alembic migrations automatically and stores SQLite data in a Docker
 volume.

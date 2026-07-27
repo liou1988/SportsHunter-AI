@@ -15,6 +15,8 @@ Useful endpoints:
 - `GET /api/predictions/today`
 - `POST /api/telegram/alerts/check`
 - `GET /dashboard`
+- `GET /api/dashboard/summary`
+- `POST /api/dashboard/evaluation/run`
 
 Prediction/evaluation loop:
 

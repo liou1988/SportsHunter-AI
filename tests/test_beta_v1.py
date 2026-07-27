@@ -32,6 +32,7 @@ from api import dependencies
 from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
+from dashboard.router import get_datahub as dashboard_get_datahub
 from scheduler import jobs
 from scheduler.runner import create_scheduler
 from telegram_bot.alerts import AlertArchive, RecommendationAlertPusher, format_recommendation_alert_message
@@ -333,6 +334,30 @@ def test_api_dependencies_reuse_datahub_cache() -> None:
         assert pipeline.context.datahub is first
     finally:
         dependencies.get_datahub.cache_clear()
+
+
+def test_dashboard_page_serves_operations_console() -> None:
+    response = TestClient(app).get("/dashboard")
+    assert response.status_code == 200
+    assert "dashboard-root" in response.text
+    assert "/dashboard/static/app.js" in response.text
+    assert "预测运行、推荐归档和自动复盘控制台" in response.text
+
+
+def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
+    app.dependency_overrides[dashboard_get_datahub] = lambda: DataHub(MockProvider(mock_settings))
+    try:
+        response = TestClient(app).get("/api/dashboard/summary")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"]["provider"] == "mock"
+    assert payload["provider"]["health"] in {"unknown", "ok"}
+    assert payload["recommendations"]["source"] == "predictions_archive"
+    assert "database" in payload
+    assert "reports" in payload
 
 
 def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:

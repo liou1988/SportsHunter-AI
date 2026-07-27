@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from database import models as orm
@@ -293,6 +293,54 @@ class HistoryRepository:
                 .limit(limit)
             )
         )
+
+
+class DashboardRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def summary(self) -> dict:
+        return {
+            "counts": {
+                "fixtures": self._count(orm.Fixture),
+                "predictions": self._count(orm.Prediction),
+                "match_results": self._count(orm.MatchResult),
+                "learning_records": self._count(orm.LearningRecord),
+                "odds_snapshots": self._count(orm.OddsSnapshot),
+            },
+            "latest_predictions": self.latest_predictions(),
+        }
+
+    def latest_predictions(self, limit: int = 8) -> list[dict]:
+        predictions = list(
+            self.session.scalars(
+                select(orm.Prediction).order_by(orm.Prediction.created_at.desc()).limit(limit)
+            )
+        )
+        items: list[dict] = []
+        for prediction in predictions:
+            fixture = prediction.fixture
+            market_prediction = (prediction.breakdown_json or {}).get("market_prediction", {})
+            items.append(
+                {
+                    "id": prediction.id,
+                    "match": f"{fixture.home_team.name} 对阵 {fixture.away_team.name}",
+                    "fixture": f"{fixture.home_team.name} vs {fixture.away_team.name}",
+                    "league": fixture.league.name,
+                    "signal": prediction.signal,
+                    "hunter_score": prediction.hunter_score,
+                    "confidence": prediction.confidence,
+                    "stake": prediction.stake,
+                    "score_prediction": market_prediction.get("score", {}),
+                    "total_goals": market_prediction.get("total_goals", {}),
+                    "handicap": market_prediction.get("handicap", {}),
+                    "created_at": prediction.created_at.isoformat(),
+                }
+            )
+        return items
+
+    def _count(self, model: type) -> int:
+        return int(self.session.scalar(select(func.count()).select_from(model)) or 0)
 
 
 def _winner(home_score: int | None, away_score: int | None) -> str | None:
