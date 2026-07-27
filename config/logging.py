@@ -20,7 +20,20 @@ def _redact_sensitive_value(value: Any) -> Any:
         return [_redact_sensitive_value(item) for item in value]
     if isinstance(value, dict):
         return {key: _redact_sensitive_value(item) for key, item in value.items()}
+    rendered = _render_if_sensitive(value)
+    if rendered is not None:
+        return rendered
     return value
+
+
+def _render_if_sensitive(value: Any) -> str | None:
+    try:
+        rendered = str(value)
+    except Exception:  # noqa: BLE001 - logging filters must never break log emission
+        return None
+    if TELEGRAM_BOT_TOKEN_PATTERN.search(rendered):
+        return TELEGRAM_BOT_TOKEN_PATTERN.sub("bot<redacted>", rendered)
+    return None
 
 
 class SensitiveDataFilter(logging.Filter):
@@ -36,6 +49,7 @@ def configure_logging(settings: Settings | None = None) -> None:
 
     root = logging.getLogger()
     sensitive_filter = SensitiveDataFilter()
+    _attach_sensitive_filter(sensitive_filter)
     if root.handlers:
         for handler in root.handlers:
             handler.setLevel(settings.log_level.upper())
@@ -60,3 +74,10 @@ def configure_logging(settings: Settings | None = None) -> None:
     root.setLevel(settings.log_level.upper())
     root.addHandler(stream_handler)
     root.addHandler(file_handler)
+
+
+def _attach_sensitive_filter(sensitive_filter: SensitiveDataFilter) -> None:
+    for logger_name in ("httpx", "httpcore", "telegram", "telegram.ext"):
+        logger = logging.getLogger(logger_name)
+        if not any(isinstance(item, SensitiveDataFilter) for item in logger.filters):
+            logger.addFilter(sensitive_filter)

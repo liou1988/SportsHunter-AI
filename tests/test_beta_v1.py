@@ -231,6 +231,26 @@ def test_logging_redacts_telegram_bot_token() -> None:
     assert record.getMessage() == "POST https://api.telegram.org/bot<redacted>/sendMessage"
 
 
+def test_logging_redacts_telegram_bot_token_from_url_objects() -> None:
+    import logging
+
+    class UrlLike:
+        def __str__(self) -> str:
+            return "https://api.telegram.org/bot123456:ABC_def-GHI/sendMessage"
+
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="HTTP Request: %s %s",
+        args=("POST", UrlLike()),
+        exc_info=None,
+    )
+    assert SensitiveDataFilter().filter(record) is True
+    assert record.getMessage() == "HTTP Request: POST https://api.telegram.org/bot<redacted>/sendMessage"
+
+
 def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     results = mock_pipeline.run_today()
     assert len(results) == 1
