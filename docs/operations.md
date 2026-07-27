@@ -16,5 +16,17 @@ Useful endpoints:
 - `POST /api/telegram/alerts/check`
 - `GET /dashboard`
 
+Prediction/evaluation loop:
+
+- Successful Telegram alerts are saved to `predictions`.
+- Finished fixtures are settled to `match_results` by the post-match collector.
+- Evaluation creates `learning_records` and writes `reports/daily_report.md`.
+
+Manual report generation inside the API container:
+
+```bash
+docker exec sportshunter-ai-api python -c "from evaluation.runner import EvaluationRunner; print(EvaluationRunner().daily().to_markdown())"
+```
+
 Generated runtime files such as SQLite databases, logs, reports and validation
 reports are excluded from Git.

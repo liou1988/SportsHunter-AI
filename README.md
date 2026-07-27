@@ -89,6 +89,13 @@ Manual alert check:
 curl -sS -X POST http://127.0.0.1:8000/api/telegram/alerts/check | python3 -m json.tool
 ```
 
+## Evaluation loop
+
+Successful Telegram alert recommendations are archived into the `predictions`
+table. Post-match collection settles finished fixtures into `match_results`.
+The daily evaluation job compares predictions with results, writes
+`learning_records`, and generates `reports/daily_report.md`.
+
 ## Directories
 
 ```text

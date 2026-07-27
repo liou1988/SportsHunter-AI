@@ -125,6 +125,21 @@ class SportsRepository:
         self.session.add(snapshot)
         return snapshot
 
+    def get_or_create_model_version(
+        self,
+        name: str = "Hunter",
+        version: str = "v1",
+        weight_config: dict | None = None,
+    ) -> orm.ModelVersion:
+        instance = self.session.scalar(select(orm.ModelVersion).where(orm.ModelVersion.name == name))
+        if instance is None:
+            instance = orm.ModelVersion(name=name, version=version, weight_config=weight_config or {}, is_active=True)
+            self.session.add(instance)
+        instance.version = version
+        if weight_config is not None:
+            instance.weight_config = weight_config
+        return instance
+
     def save_prediction(
         self,
         fixture: orm.Fixture,
@@ -140,9 +155,11 @@ class SportsRepository:
         feature_json: dict,
         breakdown_json: dict,
         predicted_side: str | None = None,
+        model_version: orm.ModelVersion | None = None,
     ) -> orm.Prediction:
         prediction = orm.Prediction(
             fixture=fixture,
+            model_version=model_version,
             predicted_side=predicted_side,
             hunter_score=hunter_score,
             grade=grade,
@@ -158,6 +175,60 @@ class SportsRepository:
         )
         self.session.add(prediction)
         return prediction
+
+    def upsert_match_result(
+        self,
+        fixture: orm.Fixture,
+        home_score: int | None,
+        away_score: int | None,
+        raw: dict | None = None,
+        settled_at: datetime | None = None,
+    ) -> orm.MatchResult:
+        instance = self.session.scalar(select(orm.MatchResult).where(orm.MatchResult.fixture_id == fixture.id))
+        if instance is None:
+            instance = orm.MatchResult(fixture=fixture)
+            self.session.add(instance)
+        instance.home_score = home_score
+        instance.away_score = away_score
+        instance.winner = _winner(home_score, away_score)
+        instance.settled_at = settled_at or datetime.now(timezone.utc)
+        instance.raw = raw or {}
+        return instance
+
+    def learning_record_exists(self, prediction_id: int) -> bool:
+        return self.session.scalar(
+            select(orm.LearningRecord.id).where(orm.LearningRecord.prediction_id == prediction_id)
+        ) is not None
+
+    def add_learning_record(
+        self,
+        prediction: orm.Prediction,
+        outcome: str,
+        module: str | None,
+        adjustment: dict | None,
+        notes: str | None,
+    ) -> orm.LearningRecord:
+        record = orm.LearningRecord(
+            prediction_id=prediction.id,
+            fixture_id=prediction.fixture_id,
+            outcome=outcome,
+            module=module,
+            adjustment=adjustment or {},
+            notes=notes,
+        )
+        self.session.add(record)
+        return record
+
+    def settled_predictions(self, since: datetime | None = None) -> list[tuple[orm.Prediction, orm.Fixture, orm.MatchResult]]:
+        query = (
+            select(orm.Prediction, orm.Fixture, orm.MatchResult)
+            .join(orm.Fixture, orm.Prediction.fixture_id == orm.Fixture.id)
+            .join(orm.MatchResult, orm.MatchResult.fixture_id == orm.Fixture.id)
+            .order_by(orm.MatchResult.settled_at.desc(), orm.Prediction.created_at.desc())
+        )
+        if since is not None:
+            query = query.where(orm.MatchResult.settled_at >= since)
+        return [(prediction, fixture, result) for prediction, fixture, result in self.session.execute(query).all()]
 
     def add_sync_log(
         self,
@@ -222,3 +293,13 @@ class HistoryRepository:
                 .limit(limit)
             )
         )
+
+
+def _winner(home_score: int | None, away_score: int | None) -> str | None:
+    if home_score is None or away_score is None:
+        return None
+    if home_score > away_score:
+        return "home"
+    if away_score > home_score:
+        return "away"
+    return "draw"

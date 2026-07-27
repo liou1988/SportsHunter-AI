@@ -4,6 +4,7 @@ from dataclasses import asdict
 import asyncio
 
 from automation.health import SystemHealthCheck
+from collector.history import HistoricalCollector
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
 from telegram_bot.alerts import RecommendationAlertPusher
@@ -22,7 +23,7 @@ def refresh_live() -> dict:
 
 
 def save_results() -> dict:
-    return asdict(DataSync().sync_history())
+    return asdict(HistoricalCollector().collect_post_match())
 
 
 def daily_report() -> str:

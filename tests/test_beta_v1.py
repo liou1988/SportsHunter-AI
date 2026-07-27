@@ -12,7 +12,7 @@ from backend.main import app
 from config.settings import Settings
 from config.logging import SensitiveDataFilter
 from database.base import Base
-from database.models import OddsSnapshot
+from database.models import LearningRecord, MatchResult, OddsSnapshot, Prediction
 from database.repositories import SportsRepository
 from datahub.hub import DataHub
 from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Team
@@ -22,6 +22,10 @@ from core.risk.models import RiskBreakdown, RiskLevel, RiskReason
 from core.signal.models import Signal
 from core.signal.rules import decide_signal
 from core.signal.strategy import SIGNAL_STRATEGY
+from evaluation.dataset import EvaluationDataset
+from evaluation.runner import EvaluationRunner
+from evaluation.settlement import SettlementService
+from pipeline.archive import PredictionArchive
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
 from api import dependencies
@@ -237,6 +241,51 @@ def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     assert result.market_prediction.total_goals.market_available is True
     assert result.market_prediction.handicap.market_available is True
     assert result.to_dict()["market_prediction"]["score"]["text"] == result.market_prediction.score.text
+
+
+def test_prediction_archive_persists_prediction_result(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+
+    prediction_id = PredictionArchive(session_factory=Session).save(result)
+
+    with Session() as session:
+        prediction = session.get(Prediction, prediction_id)
+        assert prediction is not None
+        assert prediction.signal == result.signal.signal.value
+        assert prediction.predicted_side == result.predicted_side
+        assert prediction.breakdown_json["market_prediction"]["score"]["text"] == result.market_prediction.score.text
+
+
+def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save(result)
+    result.fixture.status = FixtureStatus.FINISHED
+    result.fixture.score = Score(home=3, away=1)
+
+    settlement = SettlementService(session_factory=Session).settle_fixtures([result.fixture])
+    report = EvaluationRunner(
+        dataset=EvaluationDataset(session_factory=Session),
+        reports_dir=tmp_path,
+    ).daily()
+
+    with Session() as session:
+        assert session.query(MatchResult).count() == 1
+        assert session.query(LearningRecord).count() == 1
+
+    assert settlement.settled_count == 1
+    assert report.settled_count == 1
+    assert report.learning_records_created == 1
+    assert report.metrics.signal_hit_rate == 1.0
+    assert report.metrics.by_market["moneyline"] == 1.0
+    assert report.metrics.by_market["totals"] == 1.0
+    assert report.metrics.by_market["handicap"] == 1.0
+    assert (tmp_path / "daily_report.md").exists()
 
 
 def test_signal_strategy_balanced_alert_thresholds() -> None:
@@ -556,6 +605,7 @@ def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None
         pipeline=_fake_recommendation_pipeline(),
         notifier=FakeNotifier(),
         archive=AlertArchive(settings.telegram_alert_archive_path),
+        prediction_archive=_FakePredictionArchive(),
         settings=settings,
     )
 
@@ -602,6 +652,7 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
                 pipeline=pipeline,
                 notifier=FakeNotifier(),
                 archive=AlertArchive(tmp_path / "api-alerts.json"),
+                prediction_archive=_FakePredictionArchive(),
                 settings=Settings(
                     data_provider="mock",
                     telegram_alert_signals=["STRONG_BUY", "BUY", "WATCH"],
@@ -1120,6 +1171,15 @@ def _fake_recommendation_pipeline():
             ]
 
     return FakePipeline()
+
+
+class _FakePredictionArchive:
+    def __init__(self) -> None:
+        self.saved: list[object] = []
+
+    def save(self, result: object) -> int:
+        self.saved.append(result)
+        return len(self.saved)
 
 
 def _fake_prediction_result(fixture: Fixture, score: float, signal: str, stake: float):

@@ -1,26 +1,32 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 from config.settings import get_settings
 from evaluation.analyzer import EvaluationAnalyzer
+from evaluation.dataset import EvaluationDataset
 from evaluation.metrics import calculate_metrics
 from evaluation.models import EvaluationReport
 from evaluation.report import EvaluationReportWriter
 
 
 class EvaluationRunner:
-    def __init__(self) -> None:
+    def __init__(self, dataset: EvaluationDataset | None = None, reports_dir: Path | None = None) -> None:
         settings = get_settings()
-        self.writer = EvaluationReportWriter(settings.reports_dir)
+        self.writer = EvaluationReportWriter(reports_dir or settings.reports_dir)
         self.analyzer = EvaluationAnalyzer()
+        self.dataset = dataset or EvaluationDataset()
 
     def run(self, period: str = "daily", rows: list[dict] | None = None) -> EvaluationReport:
-        rows = rows or []
+        rows = self.dataset.rows(period) if rows is None else rows
+        learning_records_created = self.dataset.create_learning_records(rows) if rows else 0
         report = EvaluationReport(
             period=period,
             report_date=date.today(),
             metrics=calculate_metrics(rows),
+            settled_count=len(rows),
+            learning_records_created=learning_records_created,
             module_notes=self.analyzer.module_notes(rows),
         )
         self.writer.write(report)

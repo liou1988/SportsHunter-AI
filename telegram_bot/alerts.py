@@ -9,6 +9,7 @@ from typing import Any
 
 from config.settings import Settings, get_settings
 from datahub.models import OddsMarket, to_plain_dict
+from pipeline.archive import PredictionArchive
 from pipeline.models import PredictionResult
 from pipeline.runner import PredictionPipeline
 from telegram_bot.localization import (
@@ -118,6 +119,7 @@ class RecommendationAlertPusher:
         pipeline: PredictionPipeline | None = None,
         notifier: TelegramNotifier | None = None,
         archive: AlertArchive | None = None,
+        prediction_archive: PredictionArchive | None = None,
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or get_settings()
@@ -127,6 +129,7 @@ class RecommendationAlertPusher:
             self.settings.telegram_alert_archive_path,
             self.settings.telegram_alert_retention_days,
         )
+        self.prediction_archive = prediction_archive or PredictionArchive()
 
     async def push_new(self) -> AlertPushResult:
         results = self.pipeline.run_today()
@@ -162,6 +165,11 @@ class RecommendationAlertPusher:
                     error=send_result.error,
                     error_code=send_result.error_code,
                 )
+
+            try:
+                self.prediction_archive.save(result)
+            except Exception as exc:  # noqa: BLE001 - delivery should not be undone by archive failure
+                logger.exception("telegram alert prediction archive failed", extra={"fixture_id": result.fixture.id}, exc_info=exc)
 
             item = AlertItem(
                 key=self._alert_key(result),
