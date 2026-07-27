@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -369,6 +370,63 @@ class FreeFootballProvider(BaseProvider):
                         home=home,
                         draw=draw,
                         away=away,
+                        provider=self.name,
+                        raw=item,
+                    )
+                )
+            total_line = self._safe_float(item.get("overUnder"))
+            over_odds = self._safe_float(item.get("overOdds"))
+            under_odds = self._safe_float(item.get("underOdds"))
+            if total_line is None:
+                total_line = self._safe_float(
+                    item.get("total", {}).get("over", {}).get("close", {}).get("line")
+                )
+            if over_odds is None:
+                over_odds = self._safe_float(
+                    item.get("total", {}).get("over", {}).get("close", {}).get("odds")
+                )
+            if under_odds is None:
+                under_odds = self._safe_float(
+                    item.get("total", {}).get("under", {}).get("close", {}).get("odds")
+                )
+            if total_line is not None or over_odds is not None or under_odds is not None:
+                odds_items.append(
+                    Odds(
+                        fixture_id=fixture_id,
+                        market=OddsMarket.TOTALS,
+                        bookmaker=str(provider),
+                        line=total_line,
+                        over=over_odds,
+                        under=under_odds,
+                        provider=self.name,
+                        raw=item,
+                    )
+                )
+
+            spread_line = self._safe_float(item.get("spread"))
+            home_spread_odds = self._safe_float(item.get("homeTeamOdds", {}).get("spreadOdds"))
+            away_spread_odds = self._safe_float(item.get("awayTeamOdds", {}).get("spreadOdds"))
+            if spread_line is None:
+                spread_line = self._safe_float(
+                    item.get("pointSpread", {}).get("home", {}).get("close", {}).get("line")
+                )
+            if home_spread_odds is None:
+                home_spread_odds = self._safe_float(
+                    item.get("pointSpread", {}).get("home", {}).get("close", {}).get("odds")
+                )
+            if away_spread_odds is None:
+                away_spread_odds = self._safe_float(
+                    item.get("pointSpread", {}).get("away", {}).get("close", {}).get("odds")
+                )
+            if spread_line is not None or home_spread_odds is not None or away_spread_odds is not None:
+                odds_items.append(
+                    Odds(
+                        fixture_id=fixture_id,
+                        market=OddsMarket.ASIAN_HANDICAP,
+                        bookmaker=str(provider),
+                        line=spread_line,
+                        home=home_spread_odds,
+                        away=away_spread_odds,
                         provider=self.name,
                         raw=item,
                     )
@@ -782,6 +840,10 @@ class FreeFootballProvider(BaseProvider):
     def _safe_float(value: object) -> float | None:
         if value in (None, ""):
             return None
+        if isinstance(value, str):
+            match = re.search(r"[-+]?\d+(?:\.\d+)?", value.replace("%", ""))
+            if match:
+                return float(match.group(0))
         try:
             return float(str(value).replace("%", ""))
         except ValueError:

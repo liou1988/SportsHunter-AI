@@ -35,6 +35,11 @@ class TotalGoalsPrediction:
     expected_total: float
     confidence: float
     reason: str
+    edge: float = 0.0
+    bookmaker: str | None = None
+    over_odds: float | None = None
+    under_odds: float | None = None
+    market_available: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +49,11 @@ class TotalGoalsPrediction:
             "expected_total": self.expected_total,
             "confidence": self.confidence,
             "reason": self.reason,
+            "edge": self.edge,
+            "bookmaker": self.bookmaker,
+            "over_odds": self.over_odds,
+            "under_odds": self.under_odds,
+            "market_available": self.market_available,
         }
 
 
@@ -57,6 +67,11 @@ class HandicapPrediction:
     expected_margin: float
     confidence: float
     reason: str
+    edge: float = 0.0
+    bookmaker: str | None = None
+    home_odds: float | None = None
+    away_odds: float | None = None
+    market_available: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +83,11 @@ class HandicapPrediction:
             "expected_margin": self.expected_margin,
             "confidence": self.confidence,
             "reason": self.reason,
+            "edge": self.edge,
+            "bookmaker": self.bookmaker,
+            "home_odds": self.home_odds,
+            "away_odds": self.away_odds,
+            "market_available": self.market_available,
         }
 
 

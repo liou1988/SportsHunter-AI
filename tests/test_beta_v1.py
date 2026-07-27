@@ -234,6 +234,8 @@ def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     assert result.market_prediction.score.text
     assert result.market_prediction.total_goals.pick in {"OVER", "UNDER", "NO_PLAY"}
     assert result.market_prediction.handicap.pick in {"HOME_HANDICAP", "AWAY_HANDICAP", "NO_PLAY"}
+    assert result.market_prediction.total_goals.market_available is True
+    assert result.market_prediction.handicap.market_available is True
     assert result.to_dict()["market_prediction"]["score"]["text"] == result.market_prediction.score.text
 
 
@@ -302,6 +304,7 @@ def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:
     assert payload["items"][0]["score_prediction"]["text"] == "2-1"
     assert payload["items"][0]["total_goals"]["label"] == "大 2.5"
     assert payload["items"][0]["handicap"]["label"] == "主队 -0.25"
+    assert "market_available" in payload["items"][0]["total_goals"]
 
 
 def test_recommendations_today_can_include_pass() -> None:
@@ -354,6 +357,7 @@ def test_telegram_message_formats_recommendations() -> None:
     assert "比分预测：2-1" in message
     assert "大小球：大 2.5" in message
     assert "让球：戈亚尼亚竞技 -0.25" in message
+    assert "水位 主" in message
 
 
 def test_telegram_test_api_sends_test_message(monkeypatch) -> None:
@@ -806,6 +810,37 @@ def test_free_provider_today_aggregates_leagues_and_deduplicates() -> None:
     assert {fixture.league.id for fixture in fixtures} == {"esp.1"}
 
 
+def test_free_provider_odds_parses_totals_and_handicap() -> None:
+    class FakeJsonClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            if path.endswith("/summary"):
+                return _summary_odds_payload()
+            return _scoreboard_payload("eng.1", ["odds-1"])
+
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["espn"],
+        free_provider_football_leagues=["eng.1"],
+        _env_file=None,
+    )
+    provider = FreeFootballProvider(settings)
+    provider.client = FakeJsonClient()
+
+    odds = provider.get_odds("odds-1")
+
+    assert [item.market for item in odds] == [
+        OddsMarket.EUROPEAN,
+        OddsMarket.TOTALS,
+        OddsMarket.ASIAN_HANDICAP,
+    ]
+    assert odds[1].line == 2.5
+    assert odds[1].over == -115
+    assert odds[1].under == 105
+    assert odds[2].line == -0.5
+    assert odds[2].home == -140
+    assert odds[2].away == 100
+
+
 def test_free_provider_today_aggregates_supplemental_sources_and_deduplicates() -> None:
     class FakeEspnClient:
         def get_json(self, path: str, params: dict | None = None) -> dict:
@@ -978,6 +1013,23 @@ def _scoreboard_payload(league_id: str, event_ids: list[str]) -> dict:
     }
 
 
+def _summary_odds_payload() -> dict:
+    return {
+        "pickcenter": [
+            {
+                "provider": {"name": "DebugBook"},
+                "homeTeamOdds": {"moneyLine": -130, "spreadOdds": -140},
+                "awayTeamOdds": {"moneyLine": 320, "spreadOdds": 100},
+                "drawOdds": {"moneyLine": 300},
+                "overUnder": 2.5,
+                "overOdds": -115,
+                "underOdds": 105,
+                "spread": -0.5,
+            }
+        ]
+    }
+
+
 def _thesportsdb_events_payload(overrides: list[dict] | None = None) -> dict:
     events = []
     for index, override in enumerate(overrides or [{"idEvent": "tsdb-1"}], start=1):
@@ -1093,6 +1145,11 @@ def _fake_market_prediction(team: str) -> MarketPrediction:
             expected_total=2.66,
             confidence=0.58,
             reason="预期总进球高于盘口",
+            edge=0.16,
+            bookmaker="DebugBook",
+            over_odds=-110,
+            under_odds=100,
+            market_available=True,
         ),
         handicap=HandicapPrediction(
             side="home",
@@ -1103,6 +1160,11 @@ def _fake_market_prediction(team: str) -> MarketPrediction:
             expected_margin=0.78,
             confidence=0.69,
             reason="主队预期净胜球 0.78",
+            edge=0.53,
+            bookmaker="DebugBook",
+            home_odds=-120,
+            away_odds=105,
+            market_available=True,
         ),
         notes=["debug"],
     )

@@ -81,6 +81,15 @@ class MockProvider(BaseProvider):
                 under=1.90,
                 provider=self.name,
             ),
+            Odds(
+                fixture_id=fixture_id,
+                market=OddsMarket.ASIAN_HANDICAP,
+                bookmaker="MockBook",
+                line=-0.5,
+                home=1.92,
+                away=1.94,
+                provider=self.name,
+            ),
         ]
 
     def get_statistics(self, fixture_id: str) -> Statistics:

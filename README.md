@@ -73,6 +73,9 @@ prediction pipeline every few minutes and sends a message only when a new
 qualified match appears. There is no fixed daily recommendation push.
 Alert messages include the recommended side, predicted score, totals pick, and
 Asian handicap lean from the rule-based market prediction model.
+When the free ESPN feed exposes totals or spread markets, the model compares
+expected goals against the real line and includes bookmaker odds/water in the
+message. If those markets are missing, it falls back to a rule estimate.
 
 ```env
 TELEGRAM_PUSH_ENABLED=true

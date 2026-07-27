@@ -133,7 +133,15 @@ def format_market_prediction_lines(prediction: dict | None) -> list[str]:
         if label:
             suffix = []
             if expected_total is not None:
-                suffix.append(f"预期 {expected_total} 球")
+                suffix.append(f"预期 {_format_market_number(expected_total)} 球")
+            if total_goals.get("edge") is not None:
+                suffix.append(f"差值 {_format_market_number(total_goals['edge'])}")
+            if total_goals.get("over_odds") is not None and total_goals.get("under_odds") is not None:
+                suffix.append(
+                    f"水位 大 {_format_market_number(total_goals['over_odds'])} / 小 {_format_market_number(total_goals['under_odds'])}"
+                )
+            if total_goals.get("bookmaker"):
+                suffix.append(str(total_goals["bookmaker"]))
             if confidence is not None:
                 suffix.append(f"信心 {confidence}")
             detail = f"（{'，'.join(suffix)}）" if suffix else ""
@@ -150,7 +158,26 @@ def _format_handicap_prediction(handicap: dict) -> str:
         return str(handicap.get("label") or "观望")
     team = translate_team_name(handicap.get("team")) if handicap.get("team") else None
     line = handicap.get("line")
-    line_label = "平手" if line == 0 else f"{line:g}" if isinstance(line, int | float) else str(line or "")
+    line_label = "平手" if line == 0 else _format_market_number(line)
     confidence = handicap.get("confidence")
+    suffix = []
+    if handicap.get("edge") is not None:
+        suffix.append(f"盘口差值 {_format_market_number(handicap['edge'])}")
+    if handicap.get("home_odds") is not None and handicap.get("away_odds") is not None:
+        suffix.append(
+            f"水位 主 {_format_market_number(handicap['home_odds'])} / 客 {_format_market_number(handicap['away_odds'])}"
+        )
+    if handicap.get("bookmaker"):
+        suffix.append(str(handicap["bookmaker"]))
+    if confidence is not None:
+        suffix.append(f"信心 {confidence}")
     base = f"{team} {line_label}".strip() if team else str(handicap.get("label") or "")
-    return f"{base}（信心 {confidence}）" if confidence is not None else base
+    return f"{base}（{'，'.join(suffix)}）" if suffix else base
+
+
+def _format_market_number(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number:g}"
