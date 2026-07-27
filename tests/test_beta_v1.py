@@ -18,7 +18,10 @@ from datahub.hub import DataHub
 from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Team
 from datahub.providers.mock import MockProvider
 from data_sync.models import SyncSummary
-from core.risk.models import RiskBreakdown, RiskReason
+from core.risk.models import RiskBreakdown, RiskLevel, RiskReason
+from core.signal.models import Signal
+from core.signal.rules import decide_signal
+from core.signal.strategy import SIGNAL_STRATEGY
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
 from api import dependencies
 from api.routers import provider as provider_router
@@ -84,6 +87,11 @@ def test_settings_parse_free_provider_sources(monkeypatch) -> None:
 
 def test_settings_parse_telegram_alert_signals(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_ALERT_SIGNALS", "STRONG_BUY,BUY,WATCH")
+    settings = Settings(_env_file=None)
+    assert settings.telegram_alert_signals == ["STRONG_BUY", "BUY", "WATCH"]
+
+
+def test_settings_default_telegram_alert_signals_include_watch() -> None:
     settings = Settings(_env_file=None)
     assert settings.telegram_alert_signals == ["STRONG_BUY", "BUY", "WATCH"]
 
@@ -157,14 +165,14 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}" in text
     assert "TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}" in text
     assert "TELEGRAM_PUSH_ENABLED: ${TELEGRAM_PUSH_ENABLED:-false}" in text
-    assert "TELEGRAM_ALERT_SIGNALS: ${TELEGRAM_ALERT_SIGNALS:-STRONG_BUY,BUY}" in text
+    assert "TELEGRAM_ALERT_SIGNALS: ${TELEGRAM_ALERT_SIGNALS:-STRONG_BUY,BUY,WATCH}" in text
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES: ${TELEGRAM_ALERT_INTERVAL_MINUTES:-5}" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}" in text
 
 
 def test_env_example_contains_triggered_alert_settings() -> None:
     text = Path(".env.example").read_text(encoding="utf-8")
-    assert "TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY" in text
+    assert "TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY,WATCH" in text
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES=5" in text
     assert "TELEGRAM_ALERT_RETENTION_DAYS=7" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json" in text
@@ -224,6 +232,16 @@ def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     assert result.signal.signal.value in {"STRONG_BUY", "BUY", "WATCH", "PASS", "BLOCK"}
 
 
+def test_signal_strategy_balanced_alert_thresholds() -> None:
+    assert SIGNAL_STRATEGY["buy"]["score"] == 82.0
+    assert SIGNAL_STRATEGY["watch"]["score_min"] == 60.0
+    assert SIGNAL_STRATEGY["watch"]["score_max"] == 82.0
+    assert SIGNAL_STRATEGY["watch"]["stake"] == 0.25
+    assert decide_signal(82.0, RiskLevel.LOW, 0.5) == Signal.BUY
+    assert decide_signal(60.0, RiskLevel.LOW, 0.5) == Signal.WATCH
+    assert decide_signal(59.9, RiskLevel.LOW, 0.5) == Signal.PASS
+
+
 def test_repository_keeps_odds_history(mock_settings) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -271,9 +289,9 @@ def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["count"] == 2
-    assert [item["signal"] for item in payload["items"]] == ["STRONG_BUY", "BUY"]
-    assert [item["hunter_score"] for item in payload["items"]] == [91.0, 88.0]
+    assert payload["count"] == 3
+    assert [item["signal"] for item in payload["items"]] == ["STRONG_BUY", "BUY", "WATCH"]
+    assert [item["hunter_score"] for item in payload["items"]] == [91.0, 88.0, 79.0]
     assert payload["items"][0]["stake"] == "2U"
     assert payload["items"][0]["odds"]["bookmaker"] == "DebugBook"
 
@@ -288,8 +306,8 @@ def test_recommendations_today_can_include_pass() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["count"] == 3
-    assert [item["signal"] for item in payload["items"]] == ["STRONG_BUY", "BUY", "PASS"]
+    assert payload["count"] == 4
+    assert [item["signal"] for item in payload["items"]] == ["STRONG_BUY", "BUY", "WATCH", "PASS"]
 
 
 def test_telegram_message_for_empty_recommendations() -> None:
@@ -497,7 +515,7 @@ def test_telegram_today_recommendations_api_pushes_recommendations(monkeypatch) 
     payload = response.json()
     assert payload["success"] is True
     assert payload["sent"] is True
-    assert payload["count"] == 2
+    assert payload["count"] == 3
     assert "SportsHunter AI 今日推荐" in sent_messages[0]
     assert "信号：强烈推荐" in sent_messages[0]
 
@@ -514,7 +532,7 @@ def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None
 
     settings = Settings(
         data_provider="mock",
-        telegram_alert_signals=["STRONG_BUY", "BUY"],
+        telegram_alert_signals=["STRONG_BUY", "BUY", "WATCH"],
         telegram_alert_archive_path=tmp_path / "alerts.json",
         _env_file=None,
     )
@@ -530,14 +548,14 @@ def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None
 
     assert first.success is True
     assert first.sent is True
-    assert first.evaluated_count == 3
-    assert first.eligible_count == 2
-    assert first.pushed_count == 2
+    assert first.evaluated_count == 4
+    assert first.eligible_count == 3
+    assert first.pushed_count == 3
     assert second.success is True
     assert second.sent is False
     assert second.pushed_count == 0
-    assert second.skipped_count == 2
-    assert len(sent_messages) == 2
+    assert second.skipped_count == 3
+    assert len(sent_messages) == 3
     assert all("SportsHunter AI 发现合适比赛" in message for message in sent_messages)
 
 
@@ -567,7 +585,7 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
                 archive=AlertArchive(tmp_path / "api-alerts.json"),
                 settings=Settings(
                     data_provider="mock",
-                    telegram_alert_signals=["STRONG_BUY", "BUY"],
+                    telegram_alert_signals=["STRONG_BUY", "BUY", "WATCH"],
                     telegram_alert_archive_path=tmp_path / "api-alerts.json",
                     _env_file=None,
                 ),
@@ -587,8 +605,8 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
     payload = response.json()
     assert payload["success"] is True
     assert payload["sent"] is True
-    assert payload["pushed_count"] == 2
-    assert len(sent_messages) == 2
+    assert payload["pushed_count"] == 3
+    assert len(sent_messages) == 3
 
 
 def test_scheduler_registers_triggered_telegram_alert_job() -> None:
@@ -1029,6 +1047,7 @@ def _fake_recommendation_pipeline():
         def run_today(self) -> list:
             return [
                 _fake_prediction_result(fixture("buy"), 88.0, "BUY", 1.5),
+                _fake_prediction_result(fixture("watch"), 79.0, "WATCH", 0.25),
                 _fake_prediction_result(fixture("pass"), 77.0, "PASS", 0),
                 _fake_prediction_result(fixture("strong"), 91.0, "STRONG_BUY", 2),
             ]

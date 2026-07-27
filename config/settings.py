@@ -273,7 +273,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_push_enabled: bool = False
-    telegram_alert_signals: list[str] = Field(default_factory=lambda: ["STRONG_BUY", "BUY"])
+    telegram_alert_signals: list[str] = Field(default_factory=lambda: ["STRONG_BUY", "BUY", "WATCH"])
     telegram_alert_interval_minutes: int = 5
     telegram_alert_retention_days: int = 7
     telegram_alert_archive_path: Path = Path("reports/telegram_alerts.json")

@@ -55,11 +55,11 @@ curl -sS -X POST http://127.0.0.1:8000/api/telegram/alerts/check | python3 -m js
 ## 推送机制
 
 系统不再按固定时间推送今日推荐。Scheduler 会定期检查预测结果，但只有发现新的
-`STRONG_BUY` 或 `BUY` 比赛时才发送 Telegram；已发送过的比赛会记录到
+`STRONG_BUY`、`BUY` 或 `WATCH` 比赛时才发送 Telegram；已发送过的比赛会记录到
 `TELEGRAM_ALERT_ARCHIVE_PATH`，避免重复推送。
 
 ```env
-TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY
+TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY,WATCH
 TELEGRAM_ALERT_INTERVAL_MINUTES=5
 TELEGRAM_ALERT_RETENTION_DAYS=7
 TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json

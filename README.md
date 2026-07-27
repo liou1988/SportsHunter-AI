@@ -74,7 +74,7 @@ qualified match appears. There is no fixed daily recommendation push.
 
 ```env
 TELEGRAM_PUSH_ENABLED=true
-TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY
+TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY,WATCH
 TELEGRAM_ALERT_INTERVAL_MINUTES=5
 ```
 
