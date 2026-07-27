@@ -8,6 +8,13 @@ from core.signal.strategy import SIGNAL_STRATEGY
 from features.models import FeatureVector
 
 
+WARNING_LABELS = {
+    "odds_unavailable": "赔率暂不可用",
+    "odds_missing": "赔率缺失",
+    "statistics_unavailable": "赛前统计暂不可用",
+}
+
+
 class SignalEngine:
     def __init__(self, strategy: dict | None = None) -> None:
         self.strategy = strategy or SIGNAL_STRATEGY
@@ -37,5 +44,6 @@ class SignalEngine:
         if hunter_score.score < 80:
             reasons.append("猎手评分低于推荐阈值")
         if vector.warnings:
-            reasons.append(f"特征数据告警：{', '.join(vector.warnings)}")
+            warnings = [WARNING_LABELS.get(item, str(item)) for item in vector.warnings]
+            reasons.append(f"特征数据告警：{'，'.join(warnings)}")
         return reasons

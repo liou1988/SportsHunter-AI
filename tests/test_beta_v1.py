@@ -22,6 +22,7 @@ from core.risk.models import RiskBreakdown, RiskLevel, RiskReason
 from core.signal.models import Signal
 from core.signal.rules import decide_signal
 from core.signal.strategy import SIGNAL_STRATEGY
+from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
 from api import dependencies
 from api.routers import provider as provider_router
@@ -230,6 +231,10 @@ def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     result = results[0]
     assert 0 <= result.hunter_score.score <= 100
     assert result.signal.signal.value in {"STRONG_BUY", "BUY", "WATCH", "PASS", "BLOCK"}
+    assert result.market_prediction.score.text
+    assert result.market_prediction.total_goals.pick in {"OVER", "UNDER", "NO_PLAY"}
+    assert result.market_prediction.handicap.pick in {"HOME_HANDICAP", "AWAY_HANDICAP", "NO_PLAY"}
+    assert result.to_dict()["market_prediction"]["score"]["text"] == result.market_prediction.score.text
 
 
 def test_signal_strategy_balanced_alert_thresholds() -> None:
@@ -294,6 +299,9 @@ def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:
     assert [item["hunter_score"] for item in payload["items"]] == [91.0, 88.0, 79.0]
     assert payload["items"][0]["stake"] == "2U"
     assert payload["items"][0]["odds"]["bookmaker"] == "DebugBook"
+    assert payload["items"][0]["score_prediction"]["text"] == "2-1"
+    assert payload["items"][0]["total_goals"]["label"] == "大 2.5"
+    assert payload["items"][0]["handicap"]["label"] == "主队 -0.25"
 
 
 def test_recommendations_today_can_include_pass() -> None:
@@ -332,6 +340,7 @@ def test_telegram_message_formats_recommendations() -> None:
                     "stake": "2U",
                     "reason": "Debug reason",
                     "odds": {},
+                    "market_prediction": _fake_market_prediction("Atlético Goianiense").to_dict(),
                 }
             ],
         }
@@ -342,6 +351,9 @@ def test_telegram_message_formats_recommendations() -> None:
     assert "推荐方向：戈亚尼亚竞技" in message
     assert "仓位：2U" in message
     assert "开赛时间：2026-07-26 20:00 北京时间" in message
+    assert "比分预测：2-1" in message
+    assert "大小球：大 2.5" in message
+    assert "让球：戈亚尼亚竞技 -0.25" in message
 
 
 def test_telegram_test_api_sends_test_message(monkeypatch) -> None:
@@ -566,6 +578,9 @@ def test_telegram_alert_message_formats_single_prediction() -> None:
     assert "SportsHunter AI 发现合适比赛" in message
     assert "信号：推荐" in message
     assert "仓位：1.5U" in message
+    assert "比分预测：2-1" in message
+    assert "大小球：大 2.5" in message
+    assert "让球：Debug Home -0.25" in message
     assert "赔率：DebugBook" in message
 
 
@@ -1056,9 +1071,38 @@ def _fake_recommendation_pipeline():
 
 
 def _fake_prediction_result(fixture: Fixture, score: float, signal: str, stake: float):
+    market_prediction = _fake_market_prediction(fixture.home_team.name)
     return SimpleNamespace(
         fixture=fixture,
         hunter_score=SimpleNamespace(score=score, confidence=0.91, grade="★★★★☆"),
         signal=SimpleNamespace(signal=SimpleNamespace(value=signal), stake=stake, reason=f"{signal} reason"),
+        market_prediction=market_prediction,
         predicted_side=fixture.home_team.name if stake else None,
+    )
+
+
+def _fake_market_prediction(team: str) -> MarketPrediction:
+    return MarketPrediction(
+        predicted_side=team,
+        moneyline_pick="HOME",
+        score=ScorePrediction(home=2, away=1, expected_home_goals=1.72, expected_away_goals=0.94, text="2-1"),
+        total_goals=TotalGoalsPrediction(
+            line=2.5,
+            pick="OVER",
+            label="大 2.5",
+            expected_total=2.66,
+            confidence=0.58,
+            reason="预期总进球高于盘口",
+        ),
+        handicap=HandicapPrediction(
+            side="home",
+            team=team,
+            line=-0.25,
+            pick="HOME_HANDICAP",
+            label="主队 -0.25",
+            expected_margin=0.78,
+            confidence=0.69,
+            reason="主队预期净胜球 0.78",
+        ),
+        notes=["debug"],
     )

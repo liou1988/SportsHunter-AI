@@ -3,6 +3,15 @@ from __future__ import annotations
 from core.rating.scorer import ModuleScore
 
 
+MODULE_LABELS = {
+    "defense": "防守稳定性",
+    "market_heat": "市场热度",
+    "league_strength": "联赛强度",
+    "fatigue": "体能状态",
+    "live_momentum": "即时走势",
+}
+
+
 class ExplanationGenerator:
     def generate(self, module_scores: list[ModuleScore], score: float) -> str:
         strengths = sorted(module_scores, key=lambda item: item.contribution, reverse=True)[:4]
@@ -21,7 +30,8 @@ class ExplanationGenerator:
             elif item.name == "injury":
                 reasons.append("伤停风险较低")
             else:
-                reasons.append(f"{item.name.replace('_', ' ')} 对评分有正向贡献")
+                label = MODULE_LABELS.get(item.name, item.name.replace("_", " "))
+                reasons.append(f"{label}对评分有正向贡献")
         if score >= 85:
             reasons.append("综合猎手评分达到推荐阈值")
         return "；".join(reasons) + "。"

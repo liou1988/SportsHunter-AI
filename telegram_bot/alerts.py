@@ -19,7 +19,7 @@ from telegram_bot.localization import (
     translate_team_name,
 )
 from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
-from telegram_bot.recommendations import _send_with_result
+from telegram_bot.recommendations import _send_with_result, format_market_prediction_lines
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +228,7 @@ def format_recommendation_alert_message(pipeline: PredictionPipeline, result: Pr
         f"信心：{result.hunter_score.confidence}",
         f"推荐方向：{predicted_side}",
         f"仓位：{_format_stake(result.signal.stake)}",
+        *format_market_prediction_lines(result.market_prediction.to_dict()),
         f"推荐理由：{result.signal.reason}",
     ]
     odds_line = _format_odds_line(odds)

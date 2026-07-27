@@ -7,6 +7,7 @@ from core.risk.engine import RiskEngine
 from core.signal.engine import SignalEngine
 from datahub.hub import DataHub, build_datahub
 from features.pipeline import FeatureBuilder, FeaturePipeline
+from pipeline.market_model import MarketPredictionModel
 
 
 @dataclass(slots=True)
@@ -16,6 +17,7 @@ class PipelineContext:
     rating: HunterRatingEngine
     risk: RiskEngine
     signal: SignalEngine
+    market: MarketPredictionModel
 
 
 def build_pipeline_context(datahub: DataHub | None = None) -> PipelineContext:
@@ -26,4 +28,5 @@ def build_pipeline_context(datahub: DataHub | None = None) -> PipelineContext:
         rating=HunterRatingEngine(),
         risk=RiskEngine(),
         signal=SignalEngine(),
+        market=MarketPredictionModel(),
     )

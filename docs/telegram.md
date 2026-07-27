@@ -52,6 +52,8 @@ curl -sS -X POST http://127.0.0.1:8000/api/telegram/recommendations/today | pyth
 curl -sS -X POST http://127.0.0.1:8000/api/telegram/alerts/check | python3 -m json.tool
 ```
 
+推送内容包含：推荐方向、仓位、比分预测、大小球判断、让球判断、猎手评分和推荐理由。
+
 ## 推送机制
 
 系统不再按固定时间推送今日推荐。Scheduler 会定期检查预测结果，但只有发现新的

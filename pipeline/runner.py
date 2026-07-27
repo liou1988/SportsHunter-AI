@@ -17,13 +17,19 @@ class PredictionPipeline:
         hunter_score = self.context.rating.score(features)
         risk = self.context.risk.evaluate(features)
         signal = self.context.signal.generate(hunter_score, risk, features)
-        predicted_side = fixture.home_team.name if signal.stake > 0 else None
+        try:
+            odds = self.context.datahub.get_odds(fixture_id)
+        except Exception:  # noqa: BLE001 - market model can work from features only
+            odds = []
+        market_prediction = self.context.market.predict(fixture, features, odds)
+        predicted_side = market_prediction.predicted_side if signal.stake > 0 else None
         return PredictionResult(
             fixture=fixture,
             features=features,
             hunter_score=hunter_score,
             risk=risk,
             signal=signal,
+            market_prediction=market_prediction,
             predicted_side=predicted_side,
         )
 

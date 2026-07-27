@@ -99,8 +99,58 @@ def format_recommendations_message(recommendations: dict) -> str:
                 f"开赛时间：{format_beijing_time(str(item['kickoff']))}",
                 f"信号：{signal} | 猎手评分：{item['hunter_score']} | 信心：{item['confidence']}",
                 f"推荐方向：{predicted_side} | 仓位：{item['stake']}",
+                *format_market_prediction_lines(item.get("market_prediction") or item),
                 f"推荐理由：{item['reason']}",
                 "",
             ]
         )
     return "\n".join(lines).strip()
+
+
+def format_market_prediction_lines(prediction: dict | None) -> list[str]:
+    if not isinstance(prediction, dict) or not prediction:
+        return []
+
+    score = prediction.get("score") or prediction.get("score_prediction") or {}
+    total_goals = prediction.get("total_goals") or {}
+    handicap = prediction.get("handicap") or {}
+    lines: list[str] = []
+
+    if isinstance(score, dict) and score:
+        score_text = score.get("text")
+        expected_home = score.get("expected_home_goals")
+        expected_away = score.get("expected_away_goals")
+        if score_text:
+            if expected_home is not None and expected_away is not None:
+                lines.append(f"比分预测：{score_text}（预期进球 {expected_home}-{expected_away}）")
+            else:
+                lines.append(f"比分预测：{score_text}")
+
+    if isinstance(total_goals, dict) and total_goals:
+        label = total_goals.get("label")
+        expected_total = total_goals.get("expected_total")
+        confidence = total_goals.get("confidence")
+        if label:
+            suffix = []
+            if expected_total is not None:
+                suffix.append(f"预期 {expected_total} 球")
+            if confidence is not None:
+                suffix.append(f"信心 {confidence}")
+            detail = f"（{'，'.join(suffix)}）" if suffix else ""
+            lines.append(f"大小球：{label}{detail}")
+
+    if isinstance(handicap, dict) and handicap:
+        lines.append(f"让球：{_format_handicap_prediction(handicap)}")
+
+    return lines
+
+
+def _format_handicap_prediction(handicap: dict) -> str:
+    if handicap.get("pick") == "NO_PLAY":
+        return str(handicap.get("label") or "观望")
+    team = translate_team_name(handicap.get("team")) if handicap.get("team") else None
+    line = handicap.get("line")
+    line_label = "平手" if line == 0 else f"{line:g}" if isinstance(line, int | float) else str(line or "")
+    confidence = handicap.get("confidence")
+    base = f"{team} {line_label}".strip() if team else str(handicap.get("label") or "")
+    return f"{base}（信心 {confidence}）" if confidence is not None else base
