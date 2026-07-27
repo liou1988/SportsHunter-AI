@@ -178,6 +178,12 @@ def _primary_error_module(row: dict, breakdown_json: dict) -> str | None:
 
 def _learning_note(row: dict) -> str:
     if row.get("won"):
-        return "推荐方向命中，当前评分、风险和市场信号保持一致。"
+        return (
+            "推荐方向命中，当前评分、风险和市场信号保持一致；"
+            f"比分误差 {row.get('score_error')}，大小球 {row.get('total_goals_hit')}，让球 {row.get('handicap_hit')}。"
+        )
     module = row.get("primary_error_module") or "unknown"
-    return f"推荐未命中，需要复核 {module}；比分误差 {row.get('score_error')}。"
+    return (
+        f"推荐未命中，需要复核 {module}；"
+        f"比分误差 {row.get('score_error')}，大小球 {row.get('total_goals_hit')}，让球 {row.get('handicap_hit')}。"
+    )

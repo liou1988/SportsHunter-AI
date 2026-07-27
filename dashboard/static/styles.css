@@ -85,7 +85,7 @@ button:disabled {
 
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin: 18px 0;
 }
@@ -119,6 +119,10 @@ button:disabled {
 
 .bad {
   color: #a83232;
+}
+
+.warn {
+  color: #9a6416;
 }
 
 .layout {
@@ -231,6 +235,42 @@ dt {
   display: block;
 }
 
+.compact-list .list-row {
+  align-items: flex-start;
+}
+
+.error-row {
+  background: #fff7f7;
+}
+
+.coverage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.coverage-item {
+  border: 1px solid #dce4ec;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fafbfd;
+}
+
+.coverage-item span,
+.coverage-item small {
+  display: block;
+  color: #607082;
+  font-size: 12px;
+}
+
+.coverage-item strong {
+  display: block;
+  margin: 3px 0;
+  font-size: 20px;
+}
+
 pre {
   margin: 0;
   padding: 14px;
@@ -258,6 +298,10 @@ footer {
 
   .status-strip,
   .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .coverage {
     grid-template-columns: 1fr;
   }
 

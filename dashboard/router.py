@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from api.dependencies import get_datahub
-from dashboard.service import build_dashboard_summary, run_daily_evaluation
+from dashboard.service import build_dashboard_summary, check_data_quality, run_daily_evaluation
 from datahub.hub import DataHub
 
 router = APIRouter(tags=["dashboard"])
@@ -27,3 +27,10 @@ def dashboard_summary(
 @router.post("/api/dashboard/evaluation/run")
 def dashboard_run_evaluation() -> dict:
     return run_daily_evaluation()
+
+
+@router.post("/api/dashboard/data-quality/check")
+def dashboard_data_quality_check(
+    datahub: DataHub = Depends(get_datahub),
+) -> dict:
+    return check_data_quality(datahub)

@@ -45,8 +45,14 @@ class EvaluationReport:
             "## Market Performance",
             *_format_rate_items(self.metrics.by_market),
             "",
+            "## Why Wins",
+            *_format_list_items(self.wins),
+            "",
+            "## Why Losses",
+            *_format_list_items(self.losses),
+            "",
             "## Analysis",
-            *[f"- {note}" for note in self.module_notes],
+            *_format_list_items(self.module_notes),
         ]
         return "\n".join(lines)
 
@@ -71,3 +77,9 @@ def _format_rate_items(items: dict[str, float]) -> list[str]:
     if not items:
         return ["- No settled data."]
     return [f"- {name}: {rate:.2%}" for name, rate in sorted(items.items())]
+
+
+def _format_list_items(items: list[str]) -> list[str]:
+    if not items:
+        return ["- No data."]
+    return [f"- {item}" for item in items]

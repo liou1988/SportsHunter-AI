@@ -39,6 +39,7 @@ from telegram_bot.alerts import AlertArchive, RecommendationAlertPusher, format_
 from telegram_bot.fixtures import format_fixtures_message
 from telegram_bot.localization import translate_match_text, translate_team_name
 from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
+from telegram_bot.bot import command_help_text, format_alert_push_reply, format_status_message
 from telegram_bot.recommendations import format_recommendations_message
 
 
@@ -286,6 +287,10 @@ def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path
     assert report.metrics.by_market["moneyline"] == 1.0
     assert report.metrics.by_market["totals"] == 1.0
     assert report.metrics.by_market["handicap"] == 1.0
+    assert report.wins
+    assert report.losses == ["本周期暂无未命中推荐。"]
+    assert "## Why Wins" in report.to_markdown()
+    assert "## Why Losses" in report.to_markdown()
     assert (tmp_path / "daily_report.md").exists()
 
 
@@ -358,6 +363,24 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert payload["recommendations"]["source"] == "predictions_archive"
     assert "database" in payload
     assert "reports" in payload
+
+
+def test_dashboard_data_quality_check_reports_odds_coverage(mock_settings) -> None:
+    app.dependency_overrides[dashboard_get_datahub] = lambda: DataHub(MockProvider(mock_settings))
+    try:
+        response = TestClient(app).post("/api/dashboard/data-quality/check")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "mock"
+    assert payload["fixtures_count"] == 1
+    assert payload["fixtures_with_odds"] == 1
+    assert payload["odds_market_counts"] == {"european": 1, "asian_handicap": 1, "totals": 1}
+    assert payload["odds_coverage"]["european"]["ratio"] == 1.0
+    assert payload["sample_fixtures"][0]["odds_markets"] == ["asian_handicap", "european", "totals"]
+    assert payload["errors"] == []
 
 
 def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:
@@ -474,6 +497,52 @@ def test_telegram_status_api_returns_diagnostics(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["provider"] == "telegram"
     assert response.json()["config"]["ready"] is True
+
+
+def test_telegram_command_help_lists_interactive_commands() -> None:
+    text = command_help_text()
+    assert "/status" in text
+    assert "/today" in text
+    assert "/recommendations" in text
+    assert "/alerts" in text
+    assert "/report" in text
+
+
+def test_telegram_command_status_message_is_chinese() -> None:
+    text = format_status_message(
+        {
+            "health": "not_ready",
+            "config": {
+                "enabled": True,
+                "ready": False,
+                "bot_token_configured": True,
+                "chat_id_configured": False,
+                "warnings": ["缺少 CHAT_ID 或 TELEGRAM_CHAT_ID。"],
+            },
+            "error": "缺少 CHAT_ID 或 TELEGRAM_CHAT_ID。",
+        }
+    )
+    assert "SportsHunter AI 状态" in text
+    assert "配置就绪：False" in text
+    assert "缺少 CHAT_ID" in text
+
+
+def test_telegram_alert_push_reply_summarizes_result() -> None:
+    text = format_alert_push_reply(
+        {
+            "success": True,
+            "sent": False,
+            "evaluated_count": 6,
+            "eligible_count": 0,
+            "pushed_count": 0,
+            "skipped_count": 0,
+            "message": "没有新的合适比赛，未发送 Telegram。",
+            "error": None,
+        }
+    )
+    assert "机会检查" in text
+    assert "评估场次：6" in text
+    assert "符合场次：0" in text
 
 
 def test_telegram_notifier_reports_missing_config() -> None:

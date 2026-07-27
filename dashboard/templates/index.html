@@ -15,6 +15,7 @@
       </div>
       <div class="actions">
         <button class="icon-button" id="refresh-button" type="button" title="刷新">↻</button>
+        <button class="text-button" id="data-quality-button" type="button">数据质量</button>
         <button class="text-button" id="evaluation-button" type="button">生成日报</button>
         <button class="text-button" id="telegram-button" type="button">检查推送</button>
       </div>
@@ -36,6 +37,10 @@
       <div class="metric">
         <span>学习记录</span>
         <strong id="learning-count">--</strong>
+      </div>
+      <div class="metric">
+        <span>数据质量</span>
+        <strong id="data-quality-health">未检查</strong>
       </div>
     </section>
 
@@ -77,6 +82,18 @@
           <h2>数据库</h2>
         </div>
         <dl class="details" id="database-details"></dl>
+      </div>
+
+      <div class="panel span-2">
+        <div class="panel-head">
+          <h2>数据源质量</h2>
+          <a href="/api/provider/debug" target="_blank" rel="noreferrer">Provider Debug</a>
+        </div>
+        <dl class="details" id="data-quality-details">
+          <div><dt>状态</dt><dd>点击“数据质量”开始检查</dd></div>
+        </dl>
+        <div id="data-quality-coverage" class="coverage"></div>
+        <div id="data-quality-fixtures" class="list compact-list"></div>
       </div>
 
       <div class="panel span-2">

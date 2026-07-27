@@ -27,6 +27,8 @@ class EvaluationRunner:
             metrics=calculate_metrics(rows),
             settled_count=len(rows),
             learning_records_created=learning_records_created,
+            wins=self.analyzer.win_notes(rows),
+            losses=self.analyzer.loss_notes(rows),
             module_notes=self.analyzer.module_notes(rows),
         )
         self.writer.write(report)

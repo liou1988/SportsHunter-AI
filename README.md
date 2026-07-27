@@ -20,6 +20,7 @@ Open:
 - Dashboard: http://localhost:8000/dashboard
 - Provider status: http://localhost:8000/provider/status
 - Dashboard summary API: http://localhost:8000/api/dashboard/summary
+- Dashboard data quality API: http://localhost:8000/api/dashboard/data-quality/check
 
 Docker runs Alembic migrations automatically and stores SQLite data in a Docker
 volume.
@@ -66,6 +67,9 @@ Provider diagnostics:
 
 - `GET /api/provider/debug` shows checked sources, league counts, skipped ESPN
   slugs, raw fixture count and parsed fixture count.
+- `POST /api/dashboard/data-quality/check` performs an on-demand DataHub quality
+  scan and reports fixture count, source coverage, league coverage and odds
+  coverage for European odds, totals and Asian handicap samples.
 
 ## Telegram alerts
 
@@ -90,12 +94,29 @@ Manual alert check:
 curl -sS -X POST http://127.0.0.1:8000/api/telegram/alerts/check | python3 -m json.tool
 ```
 
+Interactive command bot:
+
+```bash
+docker compose --profile telegram up -d --build telegram_bot
+```
+
+Supported Telegram commands:
+
+- `/status` system and Telegram configuration status
+- `/today` today's real fixtures
+- `/recommendations` today's recommendation list
+- `/alerts` immediately checks and pushes new qualified matches
+- `/report` generates and returns the daily evaluation report
+- `/help` command list
+
 ## Evaluation loop
 
 Successful Telegram alert recommendations are archived into the `predictions`
 table. Post-match collection settles finished fixtures into `match_results`.
 The daily evaluation job compares predictions with results, writes
-`learning_records`, and generates `reports/daily_report.md`.
+`learning_records`, and generates `reports/daily_report.md`. Reports now include
+win examples, loss examples, market hit rates and module review notes for
+continuous tuning.
 
 ## Directories
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from config.settings import Settings, get_settings
 from database.repositories import DashboardRepository
 from database.session import SessionLocal
 from datahub.hub import DataHub
+from datahub.models import Fixture, Odds, OddsMarket, to_plain_dict
 from evaluation.runner import EvaluationRunner
 from pipeline.runner import PredictionPipeline
 
@@ -42,6 +44,9 @@ def run_daily_evaluation(settings: Settings | None = None) -> dict[str, Any]:
             "date": report.report_date.isoformat(),
             "settled_count": report.settled_count,
             "learning_records_created": report.learning_records_created,
+            "wins": report.wins,
+            "losses": report.losses,
+            "module_notes": report.module_notes,
             "metrics": {
                 "hunter_hit_rate": report.metrics.hunter_hit_rate,
                 "signal_hit_rate": report.metrics.signal_hit_rate,
@@ -53,6 +58,72 @@ def run_daily_evaluation(settings: Settings | None = None) -> dict[str, Any]:
             },
             "markdown": report.to_markdown(),
         },
+    }
+
+
+def check_data_quality(datahub: DataHub, max_odds_fixtures: int = 12) -> dict[str, Any]:
+    started = time.perf_counter()
+    checked_at = datetime.now(timezone.utc)
+    provider = datahub.provider
+    errors: list[dict[str, Any]] = []
+    debug = _provider_debug_payload(datahub, errors)
+
+    try:
+        fixtures = datahub.get_today_fixtures()
+    except Exception as exc:  # noqa: BLE001 - dashboard must return structured diagnostics
+        logger.exception("dashboard data quality fixture scan failed", exc_info=exc)
+        errors.append({"stage": "fixtures", "error": str(exc)})
+        fixtures = []
+
+    odds_sample = fixtures[: max(0, max_odds_fixtures)]
+    odds_counts = {market.value: 0 for market in OddsMarket}
+    fixtures_with_odds = 0
+    sample_fixtures: list[dict[str, Any]] = []
+
+    for fixture in odds_sample:
+        odds_items = _fixture_odds(datahub, fixture, errors)
+        markets = sorted({odds.market.value for odds in odds_items})
+        if odds_items:
+            fixtures_with_odds += 1
+        for market in markets:
+            odds_counts[market] = odds_counts.get(market, 0) + 1
+        sample_fixtures.append(_quality_fixture_payload(fixture, markets))
+
+    sample_size = len(odds_sample)
+    provider_errors = debug.get("errors", [])
+    has_errors = bool(errors or provider_errors)
+    return {
+        "provider": provider.name,
+        "source": getattr(provider.settings, "football_data_source", "unknown"),
+        "timezone": provider.settings.timezone,
+        "checked_at": checked_at.isoformat(),
+        "latency": round(time.perf_counter() - started, 3),
+        "health": "warning" if has_errors else "ok",
+        "today": debug.get("today") or checked_at.strftime("%Y%m%d"),
+        "fixtures_count": len(fixtures),
+        "leagues_count": len({fixture.league.id for fixture in fixtures}),
+        "leagues_checked": debug.get("leagues_checked", []),
+        "leagues_skipped": debug.get("leagues_skipped", []),
+        "sources_checked": debug.get("sources_checked", [provider.name]),
+        "fixtures_per_league": debug.get("fixtures_per_league", _fixtures_per_league(fixtures)),
+        "fixtures_per_source": debug.get("fixtures_per_source", {}),
+        "request_urls": debug.get("request_urls", [debug.get("request_url")] if debug.get("request_url") else []),
+        "http_statuses": debug.get("http_statuses", {}),
+        "fixtures_raw": debug.get("fixtures_raw", len(fixtures)),
+        "fixtures_parsed": debug.get("fixtures_parsed", len(fixtures)),
+        "odds_sample_size": sample_size,
+        "fixtures_with_odds": fixtures_with_odds,
+        "odds_market_counts": odds_counts,
+        "odds_coverage": {
+            market: {
+                "fixtures": count,
+                "ratio": round(count / sample_size, 4) if sample_size else 0.0,
+            }
+            for market, count in odds_counts.items()
+        },
+        "first_fixture": to_plain_dict(fixtures[0]) if fixtures else {},
+        "sample_fixtures": sample_fixtures,
+        "errors": [*provider_errors, *errors],
     }
 
 
@@ -141,3 +212,51 @@ def _file_payload(path: Path) -> dict[str, Any]:
         }
     except OSError as exc:
         return {"exists": False, "path": str(path), "updated_at": None, "content": "", "error": str(exc)}
+
+
+def _provider_debug_payload(datahub: DataHub, errors: list[dict[str, Any]]) -> dict[str, Any]:
+    debug_today = getattr(datahub.provider, "debug_today", None)
+    if not callable(debug_today):
+        return {}
+    try:
+        payload = debug_today()
+    except Exception as exc:  # noqa: BLE001 - quality endpoint should stay available
+        logger.exception("dashboard provider debug failed", exc_info=exc)
+        errors.append({"stage": "provider_debug", "error": str(exc)})
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fixture_odds(datahub: DataHub, fixture: Fixture, errors: list[dict[str, Any]]) -> list[Odds]:
+    try:
+        return datahub.get_odds(fixture.id)
+    except Exception as exc:  # noqa: BLE001 - keep scanning other fixtures
+        logger.warning("dashboard odds quality check failed", extra={"fixture_id": fixture.id}, exc_info=exc)
+        errors.append(
+            {
+                "stage": "odds",
+                "fixture_id": fixture.id,
+                "match": f"{fixture.home_team.name} vs {fixture.away_team.name}",
+                "error": str(exc),
+            }
+        )
+        return []
+
+
+def _quality_fixture_payload(fixture: Fixture, markets: list[str]) -> dict[str, Any]:
+    return {
+        "fixture_id": fixture.id,
+        "league": fixture.league.name,
+        "match": f"{fixture.home_team.name} vs {fixture.away_team.name}",
+        "kickoff": fixture.start_time.isoformat(),
+        "status": fixture.status.value,
+        "provider": fixture.provider,
+        "odds_markets": markets,
+    }
+
+
+def _fixtures_per_league(fixtures: list[Fixture]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for fixture in fixtures:
+        counts[fixture.league.id] = counts.get(fixture.league.id, 0) + 1
+    return counts

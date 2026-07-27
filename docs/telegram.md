@@ -68,6 +68,26 @@ TELEGRAM_ALERT_RETENTION_DAYS=7
 TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json
 ```
 
+## 交互命令机器人
+
+需要互动查询时启动 `telegram_bot` profile：
+
+```bash
+docker compose --profile telegram up -d --build telegram_bot
+```
+
+机器人支持：
+
+- `/status` 查看 Telegram 配置状态
+- `/today` 获取今日真实赛程
+- `/recommendations` 获取今日推荐
+- `/alerts` 立即检查并推送新的合适比赛
+- `/report` 生成并返回自动复盘日报
+- `/help` 查看命令列表
+
+`/alerts` 会复用现有推荐筛选和防重复归档逻辑；`/today`、`/recommendations`
+直接在当前聊天窗口返回结果。
+
 ## 容器配置确认
 
 ```bash
