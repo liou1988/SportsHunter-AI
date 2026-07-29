@@ -1,5 +1,6 @@
 const state = {
   loading: false,
+  optimizer: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -65,12 +66,31 @@ async function checkDataQuality() {
   }
 }
 
+async function applyOptimizerSuggestions() {
+  if (!state.optimizer || !state.optimizer.can_apply) {
+    setFooter("当前没有可应用的模型优化建议。");
+    return;
+  }
+  $("apply-optimizer-button").disabled = true;
+  setFooter("正在应用模型优化建议...");
+  try {
+    const payload = await fetchJson("/api/model/optimizer/apply", { method: "POST" });
+    setFooter(payload.message || "模型优化建议已处理。");
+    await refreshDashboard();
+  } catch (error) {
+    setFooter(`应用模型优化建议失败：${error.message}`);
+  } finally {
+    $("apply-optimizer-button").disabled = false;
+  }
+}
+
 function renderSummary(payload) {
   const provider = payload.provider || {};
   const database = payload.database || {};
   const recommendations = payload.recommendations || {};
   const reports = payload.reports || {};
   const analytics = payload.analytics || {};
+  const optimizer = payload.model_optimizer || {};
   const counts = database.counts || {};
 
   $("provider-health").textContent = translateHealth(provider.health);
@@ -102,10 +122,46 @@ function renderSummary(payload) {
   renderRecommendations(recommendations.items || []);
   renderLatestPredictions(database.latest_predictions || []);
   renderAnalytics(analytics);
+  renderOptimizer(optimizer);
 
   const daily = reports.daily_report || {};
   $("daily-report").textContent = daily.content || "暂无已生成复盘报告。";
   setFooter(`最后刷新：${formatTime(payload.generated_at)}`);
+}
+
+function renderOptimizer(payload) {
+  state.optimizer = payload;
+  $("optimizer-status").textContent = payload.status_label || "--";
+  $("optimizer-status").className = payload.status === "ready" ? "good" : (payload.status === "stable" ? "good" : "warn");
+  $("optimizer-sample").textContent = `${formatNumber(payload.sample_count)} / ${formatNumber(payload.min_recommended_sample)}`;
+  $("optimizer-hit-rate").textContent = formatPercent(payload.hit_rate);
+  $("optimizer-confidence-error").textContent = formatNumber(payload.confidence_error);
+  $("apply-optimizer-button").disabled = !payload.can_apply;
+
+  const warnings = payload.warnings || [];
+  $("optimizer-warnings").innerHTML = warnings.length
+    ? warnings.map((item) => `<p>${escapeHtml(item)}</p>`).join("")
+    : `<p>暂无额外风险提示。</p>`;
+
+  const suggestions = payload.suggestions || [];
+  const root = $("optimizer-suggestions");
+  if (!suggestions.length) {
+    root.innerHTML = `<p class="muted">当前权重暂不需要调整。</p>`;
+    return;
+  }
+  root.innerHTML = suggestions.map((item) => `
+    <div class="optimizer-row">
+      <div>
+        <strong>${escapeHtml(item.label || item.module)}</strong>
+        <span>${escapeHtml(item.reason || "-")}</span>
+        <small>${escapeHtml(item.evidence || "-")}</small>
+      </div>
+      <div class="optimizer-change ${item.delta > 0 ? "good" : "bad"}">
+        <strong>${formatSignedNumber(item.delta)}</strong>
+        <small>${formatNumber(item.current_weight)} → ${formatNumber(item.suggested_weight)}</small>
+      </div>
+    </div>
+  `).join("");
 }
 
 function renderAnalytics(analytics) {
@@ -479,6 +535,13 @@ function formatNumber(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function formatSignedNumber(value) {
+  const number = Number(value);
+  if (Number.isNaN(number)) return String(value || "-");
+  const formatted = formatNumber(Math.abs(number));
+  return `${number >= 0 ? "+" : "-"}${formatted}`;
+}
+
 function formatPercent(value) {
   if (value === null || value === undefined || value === "") return "-";
   const number = Number(value);
@@ -518,4 +581,5 @@ $("refresh-button").addEventListener("click", refreshDashboard);
 $("data-quality-button").addEventListener("click", checkDataQuality);
 $("evaluation-button").addEventListener("click", runEvaluation);
 $("telegram-button").addEventListener("click", checkTelegramAlerts);
+$("apply-optimizer-button").addEventListener("click", applyOptimizerSuggestions);
 refreshDashboard();

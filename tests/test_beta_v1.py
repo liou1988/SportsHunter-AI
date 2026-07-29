@@ -12,7 +12,7 @@ from backend.main import app
 from config.settings import Settings
 from config.logging import SensitiveDataFilter
 from database.base import Base
-from database.models import LearningRecord, MatchResult, OddsSnapshot, Prediction
+from database.models import LearningRecord, MatchResult, ModelVersion, OddsSnapshot, Prediction
 from database.repositories import SportsRepository
 from datahub.hub import DataHub
 from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Team
@@ -25,6 +25,8 @@ from core.signal.strategy import SIGNAL_STRATEGY
 from evaluation.dataset import EvaluationDataset
 from evaluation.runner import EvaluationRunner
 from evaluation.settlement import SettlementService
+from optimizer.engine import ModelOptimizer
+from optimizer.weights import load_active_rating_weights
 from pipeline.archive import PredictionArchive
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
@@ -320,6 +322,37 @@ def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path
     assert (tmp_path / "daily_report.md").exists()
 
 
+def test_model_optimizer_suggests_and_applies_conservative_weights(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save(result)
+    result.fixture.status = FixtureStatus.FINISHED
+    result.fixture.score = Score(home=0, away=2)
+
+    SettlementService(session_factory=Session).settle_fixtures([result.fixture])
+    optimizer = ModelOptimizer(
+        dataset=EvaluationDataset(session_factory=Session),
+        session_factory=Session,
+        min_recommended_sample=1,
+    )
+    report = optimizer.build_report()
+    applied = optimizer.apply()
+
+    assert report.can_apply is True
+    assert report.suggestions
+    assert applied["success"] is True
+    assert applied["applied"] is True
+    with Session() as session:
+        model_version = session.scalar(select(ModelVersion).where(ModelVersion.name == "Hunter"))
+        assert model_version is not None
+        assert model_version.version.startswith("v1-opt-")
+        active_weights = load_active_rating_weights(session)
+    assert active_weights != report.current_weights
+    assert round(sum(active_weights.values()), 2) == 100.0
+
+
 def test_signal_strategy_balanced_alert_thresholds() -> None:
     assert SIGNAL_STRATEGY["buy"]["score"] == 82.0
     assert SIGNAL_STRATEGY["watch"]["score_min"] == 60.0
@@ -378,6 +411,7 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "模型表现" in response.text
     assert "模块偏差" in response.text
     assert "盘口表现" in response.text
+    assert "模型优化建议" in response.text
 
 
 def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
@@ -397,7 +431,20 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert "performance" in payload["analytics"]
     assert "signal_distribution" in payload["analytics"]
     assert "prediction_trend" in payload["analytics"]
+    assert "model_optimizer" in payload
+    assert "suggestions" in payload["model_optimizer"]
     assert "reports" in payload
+
+
+def test_model_optimizer_api_returns_structured_payload() -> None:
+    response = TestClient(app).get("/api/model/optimizer/suggestions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "status" in payload
+    assert "current_weights" in payload
+    assert "suggested_weights" in payload
+    assert "suggestions" in payload
 
 
 def test_dashboard_data_quality_check_reports_odds_coverage(mock_settings) -> None:

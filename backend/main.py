@@ -7,7 +7,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from api.routers import datahub, health, matches, predictions, provider, recommendations, scan, telegram
+from api.routers import datahub, health, matches, model, predictions, provider, recommendations, scan, telegram
 from config.logging import configure_logging
 from config.settings import get_settings
 from dashboard.router import router as dashboard_router
@@ -43,6 +43,7 @@ app.include_router(health.router)
 app.include_router(provider.router)
 app.include_router(scan.router)
 app.include_router(matches.router)
+app.include_router(model.router)
 app.include_router(predictions.router)
 app.include_router(recommendations.router)
 app.include_router(datahub.router)

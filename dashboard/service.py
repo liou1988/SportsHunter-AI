@@ -15,6 +15,7 @@ from datahub.models import Fixture, Odds, OddsMarket, to_plain_dict
 from evaluation.dataset import EvaluationDataset
 from evaluation.metrics import calculate_metrics
 from evaluation.runner import EvaluationRunner
+from optimizer.engine import ModelOptimizer
 from pipeline.runner import PredictionPipeline
 from telegram_bot.localization import (
     translate_fixture_status,
@@ -39,6 +40,7 @@ def build_dashboard_summary(
         "database": database,
         "recommendations": _archived_recommendation_status(database),
         "analytics": _analytics_status(database),
+        "model_optimizer": model_optimizer_status(),
         "reports": _report_status(settings),
     }
 
@@ -72,6 +74,14 @@ def run_daily_evaluation(settings: Settings | None = None) -> dict[str, Any]:
             "markdown": report.to_markdown(),
         },
     }
+
+
+def model_optimizer_status() -> dict[str, Any]:
+    return ModelOptimizer().build_report("monthly").to_dict()
+
+
+def apply_model_optimizer() -> dict[str, Any]:
+    return ModelOptimizer().apply("monthly")
 
 
 def check_data_quality(datahub: DataHub, max_odds_fixtures: int = 12) -> dict[str, Any]:

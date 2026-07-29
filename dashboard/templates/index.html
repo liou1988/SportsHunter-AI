@@ -126,6 +126,36 @@
         </div>
         <div id="risk-chart" class="bar-list padded-list"></div>
       </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-head">
+          <div>
+            <h2>模型优化建议</h2>
+            <p>基于学习记录和复盘偏差生成保守调权方案</p>
+          </div>
+          <button class="text-button" id="apply-optimizer-button" type="button">应用建议</button>
+        </div>
+        <div class="optimizer-summary">
+          <div>
+            <span>状态</span>
+            <strong id="optimizer-status">--</strong>
+          </div>
+          <div>
+            <span>样本</span>
+            <strong id="optimizer-sample">--</strong>
+          </div>
+          <div>
+            <span>命中率</span>
+            <strong id="optimizer-hit-rate">--</strong>
+          </div>
+          <div>
+            <span>信心误差</span>
+            <strong id="optimizer-confidence-error">--</strong>
+          </div>
+        </div>
+        <div id="optimizer-warnings" class="notice-list"></div>
+        <div id="optimizer-suggestions" class="optimizer-list"></div>
+      </section>
     </section>
 
     <section class="dashboard-grid">

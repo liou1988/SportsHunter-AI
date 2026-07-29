@@ -5,9 +5,9 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
-from core.rating.weights import RATING_WEIGHTS
 from database.repositories import SportsRepository
 from database.session import SessionLocal
+from optimizer.weights import load_active_model_version, load_active_rating_weights
 from pipeline.models import PredictionResult
 
 logger = logging.getLogger(__name__)
@@ -30,10 +30,12 @@ class PredictionArchive:
         with self.session_factory() as session:
             repo = SportsRepository(session)
             fixture = repo.upsert_fixture(result.fixture)
+            active_weights = load_active_rating_weights(session, self.model_name)
+            active_version = load_active_model_version(session, self.model_name)
             model_version = repo.get_or_create_model_version(
                 name=self.model_name,
-                version=self.model_version,
-                weight_config=RATING_WEIGHTS,
+                version=active_version or self.model_version,
+                weight_config=active_weights,
             )
             session.flush()
             prediction = repo.save_prediction(

@@ -466,6 +466,76 @@ dt {
   display: block;
 }
 
+.optimizer-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid #edf1f5;
+}
+
+.optimizer-summary div {
+  padding: 12px 14px;
+  border-right: 1px solid #edf1f5;
+}
+
+.optimizer-summary div:last-child {
+  border-right: 0;
+}
+
+.optimizer-summary span,
+.optimizer-summary small {
+  display: block;
+  color: #64727f;
+  font-size: 12px;
+}
+
+.optimizer-summary strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.notice-list {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #edf1f5;
+  background: #fffaf1;
+}
+
+.notice-list p {
+  font-size: 13px;
+}
+
+.optimizer-list {
+  padding: 4px 0;
+}
+
+.optimizer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 14px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.optimizer-row strong,
+.optimizer-row span,
+.optimizer-row small {
+  display: block;
+}
+
+.optimizer-row span {
+  margin-top: 2px;
+  color: #4c5b68;
+  font-size: 13px;
+}
+
+.optimizer-change {
+  text-align: right;
+}
+
 .list {
   padding: 4px 0;
 }
@@ -523,7 +593,15 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .optimizer-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .kpi-cell:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .optimizer-summary div:nth-child(2n) {
     border-right: 0;
   }
 
@@ -554,7 +632,8 @@ footer {
   .overview-grid,
   .dashboard-grid,
   .coverage,
-  .kpi-grid {
+  .kpi-grid,
+  .optimizer-summary {
     grid-template-columns: 1fr;
   }
 
@@ -565,6 +644,23 @@ footer {
 
   .kpi-cell:last-child {
     border-bottom: 0;
+  }
+
+  .optimizer-summary div {
+    border-right: 0;
+    border-bottom: 1px solid #edf1f5;
+  }
+
+  .optimizer-summary div:last-child {
+    border-bottom: 0;
+  }
+
+  .optimizer-row {
+    grid-template-columns: 1fr;
+  }
+
+  .optimizer-change {
+    text-align: left;
   }
 
   .panel,
