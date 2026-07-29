@@ -12,6 +12,8 @@ from collector.history import HistoricalCollector
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
 from optimizer.scheduler import run_scheduled_optimizer_check
+from pipeline.archive import PredictionArchive
+from pipeline.runner import PredictionPipeline
 from telegram_bot.alerts import RecommendationAlertPusher
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,12 @@ class AutomationRunner:
     def register(self) -> BackgroundScheduler:
         self.scheduler.add_job(self.sync.sync_today, **AUTOMATION_JOBS["sync_today"], id="sync_today", replace_existing=True)
         self.scheduler.add_job(self.sync.update_odds, **AUTOMATION_JOBS["update_odds"], id="update_odds", replace_existing=True)
+        self.scheduler.add_job(
+            self._archive_today_predictions,
+            **AUTOMATION_JOBS["archive_today_predictions"],
+            id="archive_today_predictions",
+            replace_existing=True,
+        )
         self.scheduler.add_job(
             self._push_telegram_recommendation_alerts,
             **AUTOMATION_JOBS["telegram_recommendation_alerts"],
@@ -67,3 +75,7 @@ class AutomationRunner:
     @staticmethod
     def _push_telegram_recommendation_alerts() -> dict:
         return asyncio.run(RecommendationAlertPusher().push_new()).to_dict()
+
+    @staticmethod
+    def _archive_today_predictions() -> dict:
+        return PredictionArchive().save_many_if_changed(PredictionPipeline().run_today()).to_dict()

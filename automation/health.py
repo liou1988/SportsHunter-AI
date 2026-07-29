@@ -24,6 +24,7 @@ class SystemHealthCheck:
         statuses = [self.provider(), self.database()]
         statuses.append(ComponentStatus("Scheduler", "UNKNOWN", "Runtime scheduler status is process-local"))
         statuses.append(ComponentStatus("Prediction", "READY", "PredictionPipeline is importable"))
+        statuses.append(self.recommendation_archive())
         statuses.append(ComponentStatus("Evaluation", "READY", "Evaluation reports can be generated"))
         statuses.append(self.model_optimizer())
         return statuses
@@ -42,6 +43,31 @@ class SystemHealthCheck:
             return ComponentStatus("Database", "UP")
         except Exception as exc:  # noqa: BLE001
             return ComponentStatus("Database", "DOWN", str(exc))
+
+    def recommendation_archive(self) -> ComponentStatus:
+        try:
+            with engine.connect() as connection:
+                prediction_count = int(connection.execute(text("SELECT COUNT(*) FROM predictions")).scalar() or 0)
+                unsettled_count = int(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT COUNT(DISTINCT predictions.fixture_id)
+                            FROM predictions
+                            LEFT JOIN match_results ON match_results.fixture_id = predictions.fixture_id
+                            WHERE match_results.id IS NULL
+                            """
+                        )
+                    ).scalar()
+                    or 0
+                )
+            return ComponentStatus(
+                "Recommendation Archive",
+                "READY",
+                f"predictions={prediction_count}, unsettled={unsettled_count}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ComponentStatus("Recommendation Archive", "NOT_READY", str(exc))
 
     def model_optimizer(self) -> ComponentStatus:
         settings = get_settings()

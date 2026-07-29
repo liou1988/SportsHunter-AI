@@ -208,10 +208,11 @@ def _recommendation_status(pipeline: PredictionPipeline) -> dict[str, Any]:
 
 def _archived_recommendation_status(database: dict[str, Any]) -> dict[str, Any]:
     items = list(database.get("latest_predictions") or [])
+    counts = database.get("counts") or {}
     return {
         "health": "ok" if database.get("health") == "ok" else "unknown",
         "error": database.get("error"),
-        "count": len(items),
+        "count": counts.get("predictions", len(items)),
         "items": [_localize_prediction_item(item) for item in items[:8]],
         "source": "predictions_archive",
     }

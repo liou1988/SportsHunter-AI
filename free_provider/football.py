@@ -328,6 +328,10 @@ class FreeFootballProvider(BaseProvider):
                 return fixture
         if fixture_id.startswith("tsdb:") and THESPORTSDB_SOURCE in self._configured_sources():
             return self._get_thesportsdb_fixture(fixture_id)
+        if "espn" in self._configured_sources():
+            fixture = self._get_espn_fixture(fixture_id)
+            if fixture is not None:
+                return fixture
         raise ProviderUnavailableError(self.name, f"fixture {fixture_id} not found in current free feed")
 
     def get_live_matches(self) -> list[Fixture]:
@@ -554,6 +558,42 @@ class FreeFootballProvider(BaseProvider):
         if fixtures:
             return fixtures[0]
         raise ProviderUnavailableError(self.name, f"TheSportsDB fixture {fixture_id} not found")
+
+    def _get_espn_fixture(self, fixture_id: str) -> Fixture | None:
+        failures: list[str] = []
+        for league_id in self._configured_espn_leagues():
+            try:
+                payload = self.retry(
+                    f"summary-fixture:{league_id}:{fixture_id}",
+                    lambda league_id=league_id: self.client.get_json(
+                        f"/apis/site/v2/sports/soccer/{league_id}/summary",
+                        params={"event": fixture_id},
+                    ),
+                )
+                fixture = self._parse_summary_fixture(league_id, payload, fixture_id)
+                if fixture is not None:
+                    return fixture
+            except Exception as exc:  # noqa: BLE001 - try the remaining configured leagues
+                failures.append(f"{league_id}: {exc}")
+        if failures:
+            logger.warning("free provider summary fixture lookup failed", extra={"fixture_id": fixture_id})
+        return None
+
+    def _parse_summary_fixture(self, league_id: str, payload: dict, fixture_id: str) -> Fixture | None:
+        header = payload.get("header") or {}
+        competitions = header.get("competitions") or payload.get("competitions") or []
+        competition = competitions[0] if competitions else {}
+        competitors = competition.get("competitors") or []
+        if not competitors:
+            return None
+        event = {
+            "id": str(header.get("id") or fixture_id),
+            "date": competition.get("date") or header.get("date"),
+            "season": header.get("season") or payload.get("season") or {},
+            "competitions": [competition],
+        }
+        parsed = self._parse_scoreboard(league_id, {"events": [event], "leagues": [header.get("league") or {}]})
+        return parsed[0] if parsed else None
 
     def _get_thesportsdb_statistics(self, fixture: Fixture) -> Statistics:
         event_id = fixture.id.removeprefix("tsdb:")

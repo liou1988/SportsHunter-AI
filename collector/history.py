@@ -43,17 +43,20 @@ class HistoricalCollector:
         sync_summary = self.sync.sync_history()
         fixtures = self.pipeline.context.datahub.get_today_fixtures()
         settlement_summary = self.settlement.settle_fixtures(fixtures)
+        pending_summary = self.settlement.settle_pending_predictions(self.pipeline.context.datahub)
+        settled_count = settlement_summary.settled_count + pending_summary.settled_count
+        failed_count = sync_summary.failed_count + settlement_summary.failed_count + pending_summary.failed_count
         with SessionLocal() as session:
             session.add(
                 orm.CollectionRun(
                     stage=CollectionStage.POST_MATCH.value,
-                    status="success" if settlement_summary.failed_count == 0 else "partial",
-                    collected_count=settlement_summary.settled_count,
+                    status="success" if failed_count == 0 else "partial",
+                    collected_count=settled_count,
                 )
             )
             session.commit()
         return CollectionSummary(
             stage=CollectionStage.POST_MATCH,
-            collected_count=settlement_summary.settled_count,
-            failed_count=sync_summary.failed_count + settlement_summary.failed_count,
+            collected_count=settled_count,
+            failed_count=failed_count,
         )

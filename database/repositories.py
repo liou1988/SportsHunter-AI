@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from database import models as orm
@@ -229,6 +229,36 @@ class SportsRepository:
         if since is not None:
             query = query.where(orm.MatchResult.settled_at >= since)
         return [(prediction, fixture, result) for prediction, fixture, result in self.session.execute(query).all()]
+
+    def archived_predictions(
+        self,
+        limit: int = 50,
+        include_pass: bool = False,
+    ) -> list[orm.Prediction]:
+        query = select(orm.Prediction).order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id)).limit(limit)
+        if not include_pass:
+            query = query.where(orm.Prediction.signal != "PASS")
+        return list(self.session.scalars(query))
+
+    def pending_settlement_fixtures(
+        self,
+        since: datetime,
+        until: datetime,
+        limit: int = 200,
+    ) -> list[orm.Fixture]:
+        query = (
+            select(orm.Fixture)
+            .join(orm.Prediction, orm.Prediction.fixture_id == orm.Fixture.id)
+            .outerjoin(orm.MatchResult, orm.MatchResult.fixture_id == orm.Fixture.id)
+            .where(
+                orm.Fixture.start_time >= since,
+                orm.Fixture.start_time <= until,
+                orm.MatchResult.id.is_(None),
+            )
+            .order_by(orm.Fixture.start_time.asc(), orm.Fixture.id.asc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(query).unique())
 
     def add_sync_log(
         self,

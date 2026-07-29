@@ -167,7 +167,11 @@ class RecommendationAlertPusher:
                 )
 
             try:
-                self.prediction_archive.save(result)
+                save_if_changed = getattr(self.prediction_archive, "save_if_changed", None)
+                if callable(save_if_changed):
+                    save_if_changed(result)
+                else:
+                    self.prediction_archive.save(result)
             except Exception as exc:  # noqa: BLE001 - delivery should not be undone by archive failure
                 logger.exception("telegram alert prediction archive failed", extra={"fixture_id": result.fixture.id}, exc_info=exc)
 

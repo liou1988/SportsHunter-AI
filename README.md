@@ -19,6 +19,8 @@ Open:
 - Swagger: http://localhost:8000/docs
 - Dashboard: http://localhost:8000/dashboard
 - Provider status: http://localhost:8000/provider/status
+- Today recommendations: http://localhost:8000/api/recommendations/today
+- Recommendation archive: http://localhost:8000/api/recommendations/archive
 - Dashboard summary API: http://localhost:8000/api/dashboard/summary
 - Dashboard data quality API: http://localhost:8000/api/dashboard/data-quality/check
 
@@ -111,12 +113,15 @@ Supported Telegram commands:
 
 ## Evaluation loop
 
-Successful Telegram alert recommendations are archived into the `predictions`
-table. Post-match collection settles finished fixtures into `match_results`.
-The daily evaluation job compares predictions with results, writes
-`learning_records`, and generates `reports/daily_report.md`. Reports now include
-win examples, loss examples, market hit rates and module review notes for
-continuous tuning.
+Recommendation Center responses and successful Telegram alerts are archived into
+the `predictions` table with deduped snapshots. If the signal, score, confidence
+or market prediction changes, SportsHunter-AI appends a new snapshot instead of
+overwriting history. Post-match collection settles finished fixtures into
+`match_results` and also scans recent archived predictions that are still
+unsettled. The daily evaluation job compares predictions with results, writes
+`learning_records`, and generates `reports/daily_report.md`. Reports include win
+examples, loss examples, market hit rates and module review notes for continuous
+tuning.
 
 ## Directories
 

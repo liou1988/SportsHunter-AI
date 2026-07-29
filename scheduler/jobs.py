@@ -8,6 +8,8 @@ from collector.history import HistoricalCollector
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
 from optimizer.scheduler import run_scheduled_optimizer_check
+from pipeline.archive import PredictionArchive
+from pipeline.runner import PredictionPipeline
 from telegram_bot.alerts import RecommendationAlertPusher
 
 
@@ -17,6 +19,11 @@ def sync_today() -> dict:
 
 def update_odds() -> dict:
     return asdict(DataSync().update_odds())
+
+
+def archive_today_predictions() -> dict:
+    results = PredictionPipeline().run_today()
+    return PredictionArchive().save_many_if_changed(results).to_dict()
 
 
 def refresh_live() -> dict:

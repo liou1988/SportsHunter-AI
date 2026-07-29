@@ -14,6 +14,8 @@ Useful endpoints:
 - `GET /api/matches/today`
 - `GET /api/predictions/today`
 - `POST /api/telegram/alerts/check`
+- `GET /api/recommendations/today`
+- `GET /api/recommendations/archive`
 - `GET /dashboard`
 - `GET /api/dashboard/summary`
 - `POST /api/dashboard/data-quality/check`
@@ -21,9 +23,23 @@ Useful endpoints:
 
 Prediction/evaluation loop:
 
-- Successful Telegram alerts are saved to `predictions`.
+- Today recommendations are archived to `predictions` with deduped snapshots.
+- Successful Telegram alerts also archive the delivered prediction snapshot.
 - Finished fixtures are settled to `match_results` by the post-match collector.
+- The post-match collector scans recent archived predictions that are still unsettled.
 - Evaluation creates `learning_records` and writes `reports/daily_report.md`.
+- The model optimizer check writes `reports/model_optimizer_status.json` and does
+  not auto-apply weights unless `MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=true`.
+
+Default automation schedule, Asia/Shanghai:
+
+- `06:00` sync today fixtures.
+- `08:00` update odds.
+- `08:10` archive today's prediction snapshots.
+- Every `5` minutes refresh live fixtures and check Telegram recommendation alerts.
+- `23:30` save results and settle recent archived predictions.
+- `01:00` generate the daily review report.
+- `01:20` check model optimizer suggestions in observe/manual-review mode.
 
 Manual report generation inside the API container:
 

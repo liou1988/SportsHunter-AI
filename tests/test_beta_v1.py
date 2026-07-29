@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -33,6 +33,7 @@ from pipeline.archive import PredictionArchive
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
 from api import dependencies
+from api.services.recommendations import build_archived_recommendations, build_today_recommendations
 from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
@@ -293,6 +294,63 @@ def test_prediction_archive_persists_prediction_result(mock_pipeline) -> None:
         assert prediction.breakdown_json["market_prediction"]["score"]["text"] == result.market_prediction.score.text
 
 
+def test_prediction_archive_reuses_unchanged_snapshot(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    archive = PredictionArchive(session_factory=Session)
+
+    first = archive.save_if_changed(result)
+    second = archive.save_if_changed(result)
+
+    with Session() as session:
+        assert session.query(Prediction).count() == 1
+
+    assert first.created is True
+    assert first.prediction_id is not None
+    assert second.created is False
+    assert second.skipped is True
+    assert second.prediction_id == first.prediction_id
+
+
+def test_today_recommendations_archive_prediction_results(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+
+    payload = build_today_recommendations(
+        mock_pipeline,
+        include_pass=True,
+        prediction_archive=PredictionArchive(session_factory=Session),
+    )
+
+    with Session() as session:
+        assert session.query(Prediction).count() == len(mock_pipeline.run_today())
+
+    assert payload["archive"]["created_count"] == len(mock_pipeline.run_today())
+    assert payload["items"][0]["prediction_id"] is not None
+    assert payload["items"][0]["score_prediction"]
+    assert payload["items"][0]["total_goals"]
+    assert payload["items"][0]["handicap"]
+
+
+def test_archived_recommendations_read_from_prediction_archive(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    payload = build_archived_recommendations(include_pass=True, session_factory=Session)
+
+    assert payload["source"] == "predictions_archive"
+    assert payload["count"] == 1
+    assert payload["items"][0]["prediction_id"] is not None
+    assert payload["items"][0]["match"].count("对阵") == 1
+    assert payload["items"][0]["score_prediction"]["text"] == result.market_prediction.score.text
+
+
 def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -330,6 +388,35 @@ def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path
     assert report.overview
     assert report.confidence_notes
     assert (tmp_path / "daily_report.md").exists()
+
+
+def test_settlement_scans_pending_archived_predictions(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = datetime.now(timezone.utc) - timedelta(hours=3)
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    finished_fixture = result.fixture
+    finished_fixture.status = FixtureStatus.FINISHED
+    finished_fixture.score = Score(home=3, away=1)
+
+    class FakeDataHub:
+        def get_fixture(self, fixture_id: str) -> Fixture:
+            assert fixture_id == result.fixture.id
+            return finished_fixture
+
+    summary = SettlementService(session_factory=Session).settle_pending_predictions(FakeDataHub())
+
+    with Session() as session:
+        saved_result = session.scalar(select(MatchResult))
+
+    assert summary.checked_count == 1
+    assert summary.settled_count == 1
+    assert saved_result is not None
+    assert saved_result.home_score == 3
+    assert saved_result.away_score == 1
 
 
 def test_model_optimizer_suggests_and_applies_conservative_weights(mock_pipeline) -> None:
@@ -941,6 +1028,7 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
 def test_scheduler_registers_triggered_telegram_alert_job() -> None:
     scheduler = create_scheduler()
     job_ids = {job.id for job in scheduler.get_jobs()}
+    assert "archive_today_predictions" in job_ids
     assert "telegram_recommendation_alerts" in job_ids
     assert "model_optimizer_check" in job_ids
     assert "telegram_daily_recommendations" not in job_ids
@@ -955,6 +1043,22 @@ def test_telegram_alert_job_returns_push_result(monkeypatch) -> None:
 
     monkeypatch.setattr(jobs, "RecommendationAlertPusher", FakePusher)
     assert jobs.telegram_recommendation_alerts() == {"sent": True, "pushed_count": 1, "message": "ok"}
+
+
+def test_archive_today_predictions_job_returns_archive_summary(monkeypatch) -> None:
+    class FakePipeline:
+        def run_today(self) -> list:
+            return ["prediction"]
+
+    class FakeArchive:
+        def save_many_if_changed(self, results: list) -> SimpleNamespace:
+            assert results == ["prediction"]
+            return SimpleNamespace(to_dict=lambda: {"created_count": 1, "reused_count": 0, "failed_count": 0})
+
+    monkeypatch.setattr(jobs, "PredictionPipeline", FakePipeline)
+    monkeypatch.setattr(jobs, "PredictionArchive", FakeArchive)
+
+    assert jobs.archive_today_predictions() == {"created_count": 1, "reused_count": 0, "failed_count": 0}
 
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:

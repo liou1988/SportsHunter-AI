@@ -12,6 +12,14 @@ def create_scheduler() -> BackgroundScheduler:
     scheduler.add_job(jobs.sync_today, "cron", hour=6, minute=0, id="sync_today", replace_existing=True)
     scheduler.add_job(jobs.update_odds, "cron", hour=8, minute=0, id="update_odds", replace_existing=True)
     scheduler.add_job(
+        jobs.archive_today_predictions,
+        "cron",
+        hour=8,
+        minute=10,
+        id="archive_today_predictions",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         jobs.telegram_recommendation_alerts,
         "interval",
         minutes=max(1, settings.telegram_alert_interval_minutes),

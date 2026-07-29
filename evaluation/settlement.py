@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from datahub.hub import DataHub
 from datahub.models import Fixture, FixtureStatus
 from database.repositories import SportsRepository
 from database.session import SessionLocal
@@ -41,6 +43,34 @@ class SettlementService:
                     logger.exception("fixture settlement failed", extra={"fixture_id": fixture.id}, exc_info=exc)
                     summary.failed_count += 1
             session.commit()
+        return summary
+
+    def settle_pending_predictions(
+        self,
+        datahub: DataHub,
+        lookback_days: int = 3,
+        limit: int = 200,
+    ) -> SettlementSummary:
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(days=max(1, lookback_days))
+        with self.session_factory() as session:
+            repo = SportsRepository(session)
+            pending = repo.pending_settlement_fixtures(since=since, until=now, limit=limit)
+            fixture_ids = [fixture.provider_fixture_id for fixture in pending]
+
+        summary = SettlementSummary(checked_count=len(fixture_ids))
+        fixtures: list[Fixture] = []
+        for fixture_id in fixture_ids:
+            try:
+                fixtures.append(datahub.get_fixture(fixture_id))
+            except Exception as exc:  # noqa: BLE001 - keep attempting other archived fixtures
+                logger.warning("pending fixture lookup failed", extra={"fixture_id": fixture_id}, exc_info=exc)
+                summary.failed_count += 1
+
+        settled = self.settle_fixtures(fixtures)
+        summary.settled_count += settled.settled_count
+        summary.skipped_count += settled.skipped_count
+        summary.failed_count += settled.failed_count
         return summary
 
 
