@@ -1225,6 +1225,33 @@ def test_free_provider_today_aggregates_leagues_and_deduplicates() -> None:
     assert {fixture.league.id for fixture in fixtures} == {"esp.1"}
 
 
+def test_free_provider_maps_espn_postponed_status_without_finished_score() -> None:
+    payload = _scoreboard_payload("bra.1", ["postponed-1"])
+    competition = payload["events"][0]["competitions"][0]
+    competition["status"]["type"] = {
+        "id": "6",
+        "state": "post",
+        "name": "STATUS_POSTPONED",
+        "description": "Postponed",
+        "detail": "Postponed",
+        "completed": False,
+    }
+
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["espn"],
+        free_provider_football_leagues=["bra.1"],
+        _env_file=None,
+    )
+    provider = FreeFootballProvider(settings)
+    fixture = provider._parse_scoreboard("bra.1", payload)[0]
+
+    assert fixture.status == FixtureStatus.POSTPONED
+    assert fixture.score is not None
+    assert fixture.score.home is None
+    assert fixture.score.away is None
+
+
 def test_free_provider_odds_parses_totals_and_handicap() -> None:
     class FakeJsonClient:
         def get_json(self, path: str, params: dict | None = None) -> dict:

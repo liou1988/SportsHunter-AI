@@ -653,7 +653,9 @@ class FreeFootballProvider(BaseProvider):
             competitors = competition.get("competitors", []) or []
             home_payload = next((item for item in competitors if item.get("homeAway") == "home"), {})
             away_payload = next((item for item in competitors if item.get("homeAway") == "away"), {})
-            status_type = competition.get("status", {}).get("type", {})
+            status = competition.get("status", {}) or {}
+            status_type = status.get("type", {}) or {}
+            fixture_status = self._map_status(status_type)
             fixtures.append(
                 Fixture(
                     id=str(event.get("id")),
@@ -661,16 +663,11 @@ class FreeFootballProvider(BaseProvider):
                     home_team=self._parse_team(home_payload.get("team", {})),
                     away_team=self._parse_team(away_payload.get("team", {})),
                     start_time=self._parse_datetime(event.get("date")),
-                    status=self._map_status(status_type),
+                    status=fixture_status,
                     venue=(competition.get("venue") or {}).get("fullName"),
                     season=self.settings.football_data_season,
                     round_name=event.get("season", {}).get("slug"),
-                    score=Score(
-                        home=self._safe_int(home_payload.get("score")),
-                        away=self._safe_int(away_payload.get("score")),
-                        period=status_type.get("detail"),
-                        clock=competition.get("status", {}).get("displayClock"),
-                    ),
+                    score=self._score_for_status(fixture_status, home_payload, away_payload, status, status_type),
                     provider=self.name,
                     raw=event,
                 )
@@ -850,17 +847,40 @@ class FreeFootballProvider(BaseProvider):
     def _map_status(status_type: dict) -> FixtureStatus:
         state = str(status_type.get("state") or "").lower()
         name = str(status_type.get("name") or "").lower()
+        description = str(status_type.get("description") or "").lower()
+        detail = str(status_type.get("detail") or "").lower()
+        status_text = " ".join([name, description, detail])
+        completed = bool(status_type.get("completed"))
+
+        if "postpon" in status_text:
+            return FixtureStatus.POSTPONED
+        if "cancel" in status_text or "abandon" in status_text:
+            return FixtureStatus.CANCELLED
         if state == "in":
             return FixtureStatus.LIVE
-        if state == "post":
+        if state == "post" and completed:
             return FixtureStatus.FINISHED
-        if "postponed" in name:
-            return FixtureStatus.POSTPONED
-        if "cancel" in name:
-            return FixtureStatus.CANCELLED
+        if state == "post" and ("final" in status_text or "full time" in status_text):
+            return FixtureStatus.FINISHED
         if state == "pre":
             return FixtureStatus.SCHEDULED
         return FixtureStatus.UNKNOWN
+
+    def _score_for_status(
+        self,
+        status: FixtureStatus,
+        home_payload: dict,
+        away_payload: dict,
+        competition_status: dict,
+        status_type: dict,
+    ) -> Score:
+        has_match_score = status in {FixtureStatus.LIVE, FixtureStatus.FINISHED}
+        return Score(
+            home=self._safe_int(home_payload.get("score")) if has_match_score else None,
+            away=self._safe_int(away_payload.get("score")) if has_match_score else None,
+            period=status_type.get("detail"),
+            clock=competition_status.get("displayClock"),
+        )
 
     @staticmethod
     def _map_thesportsdb_status(event: dict, default_status: FixtureStatus) -> FixtureStatus:
