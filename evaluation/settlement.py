@@ -26,12 +26,12 @@ class SettlementService:
         with self.session_factory() as session:
             repo = SportsRepository(session)
             for fixture in fixtures:
-                if not _can_settle(fixture):
-                    summary.skipped_count += 1
-                    continue
                 try:
                     db_fixture = repo.upsert_fixture(fixture)
                     session.flush()
+                    if not _can_settle(fixture):
+                        summary.skipped_count += 1
+                        continue
                     repo.upsert_match_result(
                         db_fixture,
                         home_score=fixture.score.home if fixture.score else None,
@@ -56,13 +56,21 @@ class SettlementService:
         with self.session_factory() as session:
             repo = SportsRepository(session)
             pending = repo.pending_settlement_fixtures(since=since, until=now, limit=limit)
-            fixture_ids = [fixture.provider_fixture_id for fixture in pending]
+            pending_contexts = [
+                {
+                    "fixture_id": fixture.provider_fixture_id,
+                    "league_id": fixture.league.provider_league_id if fixture.league else None,
+                    "kickoff": fixture.start_time,
+                }
+                for fixture in pending
+            ]
 
-        summary = SettlementSummary(checked_count=len(fixture_ids))
+        summary = SettlementSummary(checked_count=len(pending_contexts))
         fixtures: list[Fixture] = []
-        for fixture_id in fixture_ids:
+        for context in pending_contexts:
+            fixture_id = str(context["fixture_id"])
             try:
-                fixtures.append(datahub.get_fixture(fixture_id))
+                fixtures.append(_lookup_fixture_for_settlement(datahub, context))
             except Exception as exc:  # noqa: BLE001 - keep attempting other archived fixtures
                 logger.warning("pending fixture lookup failed", extra={"fixture_id": fixture_id}, exc_info=exc)
                 summary.failed_count += 1
@@ -73,6 +81,19 @@ class SettlementService:
         summary.failed_count += settled.failed_count
         return summary
 
+
+
+def _lookup_fixture_for_settlement(datahub: DataHub, context: dict) -> Fixture:
+    provider = getattr(datahub, "provider", None)
+    lookup = getattr(provider, "get_fixture_by_context", None)
+    fixture_id = str(context["fixture_id"])
+    if callable(lookup):
+        return lookup(
+            fixture_id,
+            league_id=context.get("league_id"),
+            kickoff=context.get("kickoff"),
+        )
+    return datahub.get_fixture(fixture_id)
 
 def _can_settle(fixture: Fixture) -> bool:
     return (

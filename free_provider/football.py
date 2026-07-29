@@ -334,6 +334,28 @@ class FreeFootballProvider(BaseProvider):
                 return fixture
         raise ProviderUnavailableError(self.name, f"fixture {fixture_id} not found in current free feed")
 
+    def get_fixture_by_context(
+        self,
+        fixture_id: str,
+        league_id: str | None = None,
+        kickoff: datetime | None = None,
+    ) -> Fixture:
+        if fixture_id.startswith("tsdb:"):
+            return self._get_thesportsdb_fixture(fixture_id)
+
+        league = str(league_id or "").strip()
+        if league and self._espn_league_supported(league):
+            if kickoff is not None:
+                date_key = kickoff.astimezone(ZoneInfo(self.settings.timezone)).strftime("%Y%m%d")
+                fixture = self._get_espn_fixture_from_scoreboard(fixture_id, league, date_key)
+                if fixture is not None:
+                    return fixture
+            fixture = self._get_espn_fixture_from_summary(fixture_id, league)
+            if fixture is not None:
+                return fixture
+
+        return self.get_fixture(fixture_id)
+
     def get_live_matches(self) -> list[Fixture]:
         fixtures = [fixture for fixture in self.get_today_fixtures() if fixture.status == FixtureStatus.LIVE]
         if THESPORTSDB_SOURCE in self._configured_sources():
@@ -563,20 +585,38 @@ class FreeFootballProvider(BaseProvider):
         failures: list[str] = []
         for league_id in self._configured_espn_leagues():
             try:
-                payload = self.retry(
-                    f"summary-fixture:{league_id}:{fixture_id}",
-                    lambda league_id=league_id: self.client.get_json(
-                        f"/apis/site/v2/sports/soccer/{league_id}/summary",
-                        params={"event": fixture_id},
-                    ),
-                )
-                fixture = self._parse_summary_fixture(league_id, payload, fixture_id)
+                fixture = self._get_espn_fixture_from_summary(fixture_id, league_id)
                 if fixture is not None:
                     return fixture
             except Exception as exc:  # noqa: BLE001 - try the remaining configured leagues
                 failures.append(f"{league_id}: {exc}")
         if failures:
             logger.warning("free provider summary fixture lookup failed", extra={"fixture_id": fixture_id})
+        return None
+
+    def _get_espn_fixture_from_scoreboard(
+        self,
+        fixture_id: str,
+        league_id: str,
+        date_key: str,
+    ) -> Fixture | None:
+        payload = self._fetch_espn_scoreboard(league_id, date_key)
+        for fixture in self._parse_scoreboard(league_id, payload):
+            if fixture.id == fixture_id:
+                return fixture
+        return None
+
+    def _get_espn_fixture_from_summary(self, fixture_id: str, league_id: str) -> Fixture | None:
+        payload = self.retry(
+            f"summary-fixture:{league_id}:{fixture_id}",
+            lambda league_id=league_id: self.client.get_json(
+                f"/apis/site/v2/sports/soccer/{league_id}/summary",
+                params={"event": fixture_id},
+            ),
+        )
+        fixture = self._parse_summary_fixture(league_id, payload, fixture_id)
+        if fixture is not None and fixture.id == fixture_id:
+            return fixture
         return None
 
     def _parse_summary_fixture(self, league_id: str, payload: dict, fixture_id: str) -> Fixture | None:

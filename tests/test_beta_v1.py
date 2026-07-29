@@ -494,6 +494,70 @@ def test_settlement_scans_pending_archived_predictions(mock_pipeline) -> None:
     assert saved_result.away_score == 1
 
 
+def test_settlement_updates_unsettled_fixture_status_without_result(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    result.fixture.status = FixtureStatus.POSTPONED
+    result.fixture.score = Score()
+    summary = SettlementService(session_factory=Session).settle_fixtures([result.fixture])
+
+    with Session() as session:
+        fixture = session.execute(select(Prediction).limit(1)).scalar_one().fixture
+        saved_result = session.scalar(select(MatchResult))
+
+    assert summary.skipped_count == 1
+    assert summary.settled_count == 0
+    assert saved_result is None
+    assert fixture.status == FixtureStatus.POSTPONED.value
+
+
+def test_settlement_uses_contextual_provider_lookup_for_pending_predictions(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    result.fixture.league.id = "bra.2"
+    result.fixture.start_time = datetime.now(timezone.utc) - timedelta(hours=6)
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    finished_fixture = result.fixture
+    finished_fixture.status = FixtureStatus.FINISHED
+    finished_fixture.score = Score(home=2, away=0)
+
+    class ContextProvider:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def get_fixture_by_context(self, fixture_id: str, league_id: str | None = None, kickoff=None) -> Fixture:
+            self.calls.append((fixture_id, league_id, kickoff))
+            return finished_fixture
+
+    class FakeDataHub:
+        def __init__(self) -> None:
+            self.provider = ContextProvider()
+
+        def get_fixture(self, fixture_id: str) -> Fixture:
+            raise AssertionError("settlement should use provider context lookup when available")
+
+    datahub = FakeDataHub()
+    summary = SettlementService(session_factory=Session).settle_pending_predictions(datahub)
+
+    with Session() as session:
+        saved_result = session.scalar(select(MatchResult))
+
+    assert summary.checked_count == 1
+    assert summary.settled_count == 1
+    assert saved_result is not None
+    assert saved_result.home_score == 2
+    assert saved_result.away_score == 0
+    assert datahub.provider.calls[0][1] == "bra.2"
+    assert datahub.provider.calls[0][2] is not None
+
+
 def test_model_optimizer_suggests_and_applies_conservative_weights(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -1156,11 +1220,13 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
 
 def test_scheduler_registers_triggered_telegram_alert_job() -> None:
     scheduler = create_scheduler()
-    job_ids = {job.id for job in scheduler.get_jobs()}
-    assert "archive_today_predictions" in job_ids
-    assert "telegram_recommendation_alerts" in job_ids
-    assert "model_optimizer_check" in job_ids
-    assert "telegram_daily_recommendations" not in job_ids
+    jobs_by_id = {job.id: job for job in scheduler.get_jobs()}
+    assert "archive_today_predictions" in jobs_by_id
+    assert "telegram_recommendation_alerts" in jobs_by_id
+    assert "model_optimizer_check" in jobs_by_id
+    assert "telegram_daily_recommendations" not in jobs_by_id
+    assert "interval[0:30:00]" in str(jobs_by_id["save_results"].trigger)
+    assert "cron[hour='10', minute='0']" in str(jobs_by_id["daily_report"].trigger)
     if scheduler.running:
         scheduler.shutdown(wait=False)
 

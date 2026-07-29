@@ -27,8 +27,8 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
     scheduler.add_job(jobs.refresh_live, "interval", minutes=5, id="refresh_live", replace_existing=True)
-    scheduler.add_job(jobs.save_results, "cron", hour=23, minute=30, id="save_results", replace_existing=True)
-    scheduler.add_job(jobs.daily_report, "cron", hour=1, minute=0, id="daily_report", replace_existing=True)
+    scheduler.add_job(jobs.save_results, "interval", minutes=30, id="save_results", replace_existing=True)
+    scheduler.add_job(jobs.daily_report, "cron", hour=10, minute=0, id="daily_report", replace_existing=True)
     if settings.model_optimizer_enabled:
         scheduler.add_job(
             jobs.model_optimizer_check,

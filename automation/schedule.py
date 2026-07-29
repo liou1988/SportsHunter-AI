@@ -4,7 +4,7 @@ AUTOMATION_JOBS = {
     "archive_today_predictions": {"trigger": "cron", "hour": 8, "minute": 10},
     "telegram_recommendation_alerts": {"trigger": "interval", "minutes": 5},
     "refresh_live": {"trigger": "interval", "minutes": 5},
-    "save_results": {"trigger": "cron", "hour": 23, "minute": 30},
-    "daily_report": {"trigger": "cron", "hour": 1, "minute": 0},
+    "save_results": {"trigger": "interval", "minutes": 30},
+    "daily_report": {"trigger": "cron", "hour": 10, "minute": 0},
     "model_optimizer_check": {"trigger": "cron", "hour": 1, "minute": 20},
 }
