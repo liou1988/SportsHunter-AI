@@ -10,6 +10,8 @@ from database.session import SessionLocal
 from datahub.models import OddsMarket, to_plain_dict
 from pipeline.archive import ArchiveBatchResult, PredictionArchive
 from pipeline.models import PredictionResult
+
+from telegram_bot.localization import translate_league_name, translate_match_text, translate_signal, translate_team_name
 from pipeline.runner import PredictionPipeline
 
 SessionFactory = Callable[[], Session]
@@ -68,17 +70,17 @@ def build_archived_recommendations(
 def _recommendation_item(pipeline: PredictionPipeline, result: PredictionResult, prediction_id: int | None = None) -> dict:
     fixture = result.fixture
     odds = _fixture_odds(pipeline, fixture.id)
-    market_prediction = _market_prediction(result)
+    market_prediction = _localize_market_prediction(_market_prediction(result))
     return {
         "prediction_id": prediction_id,
         "fixture_id": fixture.id,
-        "league": fixture.league.name,
-        "match": f"{fixture.home_team.name} 对阵 {fixture.away_team.name}",
+        "league": translate_league_name(fixture.league.name),
+        "match": translate_match_text(f"{fixture.home_team.name} vs {fixture.away_team.name}"),
         "kickoff": fixture.start_time.isoformat(),
         "hunter_score": result.hunter_score.score,
         "confidence": result.hunter_score.confidence,
         "signal": result.signal.signal.value,
-        "predicted_side": result.predicted_side,
+        "predicted_side": translate_team_name(result.predicted_side) if result.predicted_side else None,
         "stake": _format_stake(result.signal.stake),
         "reason": result.signal.reason,
         "odds": odds,
@@ -91,17 +93,17 @@ def _recommendation_item(pipeline: PredictionPipeline, result: PredictionResult,
 
 def _archived_recommendation_item(prediction: Any) -> dict[str, Any]:
     fixture = prediction.fixture
-    market_prediction = (prediction.breakdown_json or {}).get("market_prediction", {})
+    market_prediction = _localize_market_prediction((prediction.breakdown_json or {}).get("market_prediction", {}))
     return {
         "prediction_id": prediction.id,
         "fixture_id": fixture.provider_fixture_id,
-        "league": fixture.league.name if fixture.league else "-",
-        "match": f"{fixture.home_team.name} 对阵 {fixture.away_team.name}",
+        "league": translate_league_name(fixture.league.name) if fixture.league else "-",
+        "match": translate_match_text(f"{fixture.home_team.name} vs {fixture.away_team.name}"),
         "kickoff": fixture.start_time.isoformat(),
         "hunter_score": prediction.hunter_score,
         "confidence": prediction.confidence,
         "signal": prediction.signal,
-        "predicted_side": prediction.predicted_side,
+        "predicted_side": translate_team_name(prediction.predicted_side) if prediction.predicted_side else None,
         "stake": _format_stake(prediction.stake),
         "reason": prediction.reason,
         "odds": _archived_odds(fixture),
@@ -172,3 +174,17 @@ def _market_prediction(result: PredictionResult) -> dict:
     if isinstance(prediction, dict):
         return prediction
     return {}
+
+
+def _localize_market_prediction(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    localized = dict(payload)
+    if localized.get("predicted_side"):
+        localized["predicted_side"] = translate_team_name(localized["predicted_side"])
+    handicap = localized.get("handicap")
+    if isinstance(handicap, dict):
+        localized["handicap"] = dict(handicap)
+        if localized["handicap"].get("team"):
+            localized["handicap"]["team"] = translate_team_name(localized["handicap"]["team"])
+    return localized

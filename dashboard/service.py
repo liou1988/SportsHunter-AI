@@ -22,6 +22,7 @@ from telegram_bot.localization import (
     translate_league_name,
     translate_match_text,
     translate_signal,
+    translate_team_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -519,10 +520,29 @@ def _localize_prediction_item(item: dict[str, Any]) -> dict[str, Any]:
         localized["fixture"] = translate_match_text(str(localized["fixture"]))
     if localized.get("league"):
         localized["league"] = translate_league_name(str(localized["league"]))
+    if localized.get("predicted_side"):
+        localized["predicted_side"] = translate_team_name(str(localized["predicted_side"]))
+    for key in ("market_prediction", "handicap"):
+        if isinstance(localized.get(key), dict):
+            localized[key] = _localize_market_payload(localized[key])
     if localized.get("signal"):
         localized["signal_label"] = translate_signal(str(localized["signal"]))
     return localized
 
+
+
+def _localize_market_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    localized = dict(payload)
+    if localized.get("predicted_side"):
+        localized["predicted_side"] = translate_team_name(str(localized["predicted_side"]))
+    handicap = localized.get("handicap")
+    if isinstance(handicap, dict):
+        localized["handicap"] = dict(handicap)
+        if localized["handicap"].get("team"):
+            localized["handicap"]["team"] = translate_team_name(str(localized["handicap"]["team"]))
+    if localized.get("team"):
+        localized["team"] = translate_team_name(str(localized["team"]))
+    return localized
 
 def _localize_settled_item(item: dict[str, Any]) -> dict[str, Any]:
     localized = dict(item)
@@ -533,7 +553,7 @@ def _localize_settled_item(item: dict[str, Any]) -> dict[str, Any]:
     if localized.get("signal"):
         localized["signal_label"] = translate_signal(str(localized["signal"]))
     if localized.get("predicted_side"):
-        localized["predicted_side"] = translate_match_text(str(localized["predicted_side"]))
+        localized["predicted_side"] = translate_team_name(str(localized["predicted_side"]))
     localized["result_label"] = "命中" if localized.get("hit") else "未中"
     return localized
 
