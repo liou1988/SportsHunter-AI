@@ -53,7 +53,7 @@ def build_archived_recommendations(
     try:
         with session_factory() as session:
             predictions = SportsRepository(session).archived_predictions(limit=limit, include_pass=include_pass)
-            items = [_archived_recommendation_item(prediction) for prediction in predictions]
+            items = _unique_recommendation_items([_archived_recommendation_item(prediction) for prediction in predictions])
         return {
             "count": len(items),
             "items": items,
@@ -177,6 +177,22 @@ def _archived_recommendation_item(prediction: Any) -> dict[str, Any]:
         "settled": fixture.result is not None,
         "result": _result_payload(fixture.result),
     }
+
+
+def _unique_recommendation_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in items:
+        key = (
+            str(item.get("league") or "").casefold().strip(),
+            str(item.get("match") or "").casefold().strip(),
+            str(item.get("kickoff") or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def _archived_odds(fixture: Any) -> dict:

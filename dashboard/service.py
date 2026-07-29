@@ -208,15 +208,32 @@ def _recommendation_status(pipeline: PredictionPipeline) -> dict[str, Any]:
 
 
 def _archived_recommendation_status(database: dict[str, Any]) -> dict[str, Any]:
-    items = list(database.get("latest_predictions") or [])
-    counts = database.get("counts") or {}
+    items = _unique_dashboard_recommendations(
+        [_localize_prediction_item(item) for item in list(database.get("latest_predictions") or [])]
+    )
     return {
         "health": "ok" if database.get("health") == "ok" else "unknown",
         "error": database.get("error"),
-        "count": counts.get("predictions", len(items)),
-        "items": [_localize_prediction_item(item) for item in items[:8]],
-        "source": "predictions_archive",
+        "count": len(items),
+        "items": items,
+        "source": "predictions_archive_unique_latest",
     }
+
+
+def _unique_dashboard_recommendations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in items:
+        key = (
+            str(item.get("league") or "").casefold().strip(),
+            str(item.get("match") or item.get("fixture") or "").casefold().strip(),
+            str(item.get("kickoff") or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def _report_status(settings: Settings) -> dict[str, Any]:

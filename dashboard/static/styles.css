@@ -192,7 +192,8 @@ a {
   justify-content: flex-end;
 }
 
-.sort-control {
+.sort-control,
+.filter-control {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -201,7 +202,8 @@ a {
   white-space: nowrap;
 }
 
-.sort-control select {
+.sort-control select,
+.filter-control select {
   height: 30px;
   min-width: 138px;
   border: 1px solid #d5dee8;

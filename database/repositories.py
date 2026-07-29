@@ -235,10 +235,9 @@ class SportsRepository:
         limit: int = 50,
         include_pass: bool = False,
     ) -> list[orm.Prediction]:
-        query = select(orm.Prediction).order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id)).limit(limit)
-        if not include_pass:
-            query = query.where(orm.Prediction.signal != "PASS")
-        return list(self.session.scalars(query))
+        query = select(orm.Prediction).order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id))
+        candidates = list(self.session.scalars(query.limit(max(limit * 10, limit))))
+        return _latest_prediction_per_fixture(candidates, limit=limit, include_pass=include_pass)
 
     def pending_settlement_fixtures(
         self,
@@ -325,6 +324,45 @@ class HistoryRepository:
         )
 
 
+def _latest_prediction_per_fixture(
+    predictions: list[orm.Prediction],
+    limit: int,
+    include_pass: bool,
+) -> list[orm.Prediction]:
+    latest: list[orm.Prediction] = []
+    seen_keys: set[tuple] = set()
+    for prediction in predictions:
+        key = _prediction_fixture_key(prediction)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        if not include_pass and prediction.signal == "PASS":
+            continue
+        latest.append(prediction)
+        if len(latest) >= limit:
+            break
+    return latest
+
+
+def _prediction_fixture_key(prediction: orm.Prediction) -> tuple:
+    fixture = prediction.fixture
+    start_time = (
+        fixture.start_time.replace(second=0, microsecond=0, tzinfo=None)
+        if fixture.start_time
+        else None
+    )
+    return (
+        _dedupe_text(fixture.league.name if fixture.league else fixture.league_id),
+        _dedupe_text(fixture.home_team.name if fixture.home_team else fixture.home_team_id),
+        _dedupe_text(fixture.away_team.name if fixture.away_team else fixture.away_team_id),
+        start_time,
+    )
+
+
+def _dedupe_text(value: object) -> str:
+    return str(value or "").casefold().strip()
+
+
 class DashboardRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -342,18 +380,24 @@ class DashboardRepository:
             "analytics": self.analytics(),
         }
 
-    def latest_predictions(self, limit: int = 8) -> list[dict]:
-        predictions = list(
+    def latest_predictions(self, limit: int = 80) -> list[dict]:
+        candidates = list(
             self.session.scalars(
                 select(orm.Prediction)
-                .order_by(
-                    orm.Prediction.confidence.desc(),
-                    orm.Prediction.hunter_score.desc(),
-                    orm.Prediction.created_at.desc(),
-                )
-                .limit(limit)
+                .order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id))
+                .limit(max(limit * 10, limit))
             )
         )
+        predictions = sorted(
+            _latest_prediction_per_fixture(candidates, limit=max(limit * 10, limit), include_pass=True),
+            key=lambda prediction: (
+                prediction.confidence,
+                prediction.hunter_score,
+                prediction.created_at,
+                prediction.id,
+            ),
+            reverse=True,
+        )[:limit]
         items: list[dict] = []
         for prediction in predictions:
             fixture = prediction.fixture

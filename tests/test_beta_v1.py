@@ -359,6 +359,39 @@ def test_archived_recommendations_read_from_prediction_archive(mock_pipeline) ->
 
 
 
+
+
+def test_archived_recommendations_show_latest_fixture_once(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    archive = PredictionArchive(session_factory=Session)
+    first_id = archive.save(result)
+    second_id = archive.save(result)
+
+    payload = build_archived_recommendations(include_pass=True, session_factory=Session)
+
+    assert first_id != second_id
+    assert payload["count"] == 1
+    assert payload["items"][0]["prediction_id"] == second_id
+
+
+def test_dashboard_latest_predictions_show_fixture_once(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    archive = PredictionArchive(session_factory=Session)
+    archive.save(result)
+    latest_id = archive.save(result)
+
+    with Session() as session:
+        items = DashboardRepository(session).latest_predictions()
+
+    assert [item["id"] for item in items].count(latest_id) == 1
+    assert len([item for item in items if item["fixture"] == items[0]["fixture"]]) == 1
+
 def test_recommendations_export_csv_contains_prediction_fields(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -613,6 +646,10 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "dashboard-root" in response.text
     assert "/dashboard/static/app.js" in response.text
     assert "recommendations-scroll" in response.text
+    assert "recommendation-signal-filter" in response.text
+    assert "recommendation-league-filter" in response.text
+    assert "recommendation-time-filter" in response.text
+    assert "recommendation-export-button" in response.text
     assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
@@ -649,7 +686,7 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     payload = response.json()
     assert payload["provider"]["provider"] == "mock"
     assert payload["provider"]["health"] in {"unknown", "ok"}
-    assert payload["recommendations"]["source"] == "predictions_archive"
+    assert payload["recommendations"]["source"] == "predictions_archive_unique_latest"
     assert "database" in payload
     assert "analytics" in payload
     assert "performance" in payload["analytics"]

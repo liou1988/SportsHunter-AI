@@ -1,7 +1,11 @@
 const state = {
   loading: false,
   optimizer: null,
+  recommendationItems: [],
   recommendationSort: "confidence",
+  recommendationSignalFilter: "all",
+  recommendationLeagueFilter: "all",
+  recommendationTimeFilter: "all",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -120,7 +124,9 @@ function renderSummary(payload) {
     ["异常", database.error || "无"],
   ]);
 
-  renderRecommendations(recommendations.items || []);
+  state.recommendationItems = recommendations.items || [];
+  populateRecommendationFilters(state.recommendationItems);
+  renderRecommendations(state.recommendationItems);
   renderLatestPredictions(database.latest_predictions || []);
   renderAnalytics(analytics);
   renderOptimizer(optimizer);
@@ -519,11 +525,13 @@ function renderQualityFixtures(fixtures, errors) {
 
 function renderRecommendations(items) {
   const body = $("recommendations-body");
-  if (!items.length) {
-    body.innerHTML = `<tr><td colspan="7">&#26242;&#26080;&#24402;&#26723;&#25512;&#33616;&#65292;&#28857;&#20987;&#8220;&#26816;&#26597;&#25512;&#36865;&#8221;&#21518;&#20250;&#33258;&#21160;&#20889;&#20837;&#12290;</td></tr>`;
+  const filteredItems = filterRecommendations(items);
+  $("recommendation-count").textContent = filteredItems.length;
+  if (!filteredItems.length) {
+    body.innerHTML = `<tr><td colspan="7">&#24403;&#21069;&#31579;&#36873;&#26465;&#20214;&#19979;&#26242;&#26080;&#25512;&#33616;&#12290;</td></tr>`;
     return;
   }
-  const sortedItems = sortRecommendations(items);
+  const sortedItems = sortRecommendations(filteredItems);
   body.innerHTML = sortedItems.map((item) => {
     const score = item.score_prediction || {};
     const total = item.total_goals || {};
@@ -558,6 +566,96 @@ function renderRecommendations(items) {
       </tr>
     `;
   }).join("");
+}
+
+function populateRecommendationFilters(items) {
+  const leagues = [...new Set(items.map((item) => item.league).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b), "zh-CN"));
+  syncSelectOptions("recommendation-league-filter", [
+    { value: "all", label: "\u5168\u90e8\u8054\u8d5b" },
+    ...leagues.map((league) => ({ value: league, label: league })),
+  ], "all");
+}
+
+function syncSelectOptions(id, options, fallback) {
+  const select = $(id);
+  if (!select) return;
+  const current = select.value || fallback;
+  select.innerHTML = options
+    .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
+    .join("");
+  select.value = options.some((option) => option.value === current) ? current : fallback;
+  if (id === "recommendation-league-filter") state.recommendationLeagueFilter = select.value;
+}
+
+function filterRecommendations(items) {
+  return items.filter((item) => {
+    if (state.recommendationSignalFilter !== "all" && item.signal !== state.recommendationSignalFilter) return false;
+    if (state.recommendationLeagueFilter !== "all" && item.league !== state.recommendationLeagueFilter) return false;
+    return matchesRecommendationTimeFilter(item.kickoff);
+  });
+}
+
+function matchesRecommendationTimeFilter(kickoff) {
+  if (state.recommendationTimeFilter === "all") return true;
+  const date = new Date(kickoff || 0);
+  if (Number.isNaN(date.getTime())) return false;
+  const now = new Date();
+  if (state.recommendationTimeFilter === "today") return localDateKey(date) === localDateKey(now);
+  if (state.recommendationTimeFilter === "upcoming") return date.getTime() >= now.getTime();
+  if (state.recommendationTimeFilter === "next24h") {
+    const diff = date.getTime() - now.getTime();
+    return diff >= 0 && diff <= 24 * 60 * 60 * 1000;
+  }
+  return true;
+}
+
+function localDateKey(date) {
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+function currentRecommendationRows() {
+  return sortRecommendations(filterRecommendations(state.recommendationItems));
+}
+
+function exportCurrentRecommendations() {
+  const items = currentRecommendationRows();
+  if (!items.length) {
+    setFooter("\u5f53\u524d\u7b5b\u9009\u6761\u4ef6\u4e0b\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u63a8\u8350\u3002");
+    return;
+  }
+  const columns = [
+    ["\u8054\u8d5b", (item) => item.league],
+    ["\u6bd4\u8d5b", (item) => item.match],
+    ["\u5f00\u8d5b\u65f6\u95f4", (item) => item.kickoff],
+    ["\u4fe1\u53f7", (item) => item.signal_label || translateSignal(item.signal)],
+    ["Hunter\u8bc4\u5206", (item) => item.hunter_score],
+    ["\u4fe1\u5fc3", (item) => item.confidence],
+    ["\u4ed3\u4f4d", (item) => formatStake(item.stake)],
+    ["\u6bd4\u5206\u9884\u6d4b", (item) => (item.score_prediction || {}).text],
+    ["\u5927\u5c0f\u7403", (item) => (item.total_goals || {}).label],
+    ["\u8ba9\u7403", (item) => (item.handicap || {}).label],
+    ["\u63a8\u8350\u7406\u7531", (item) => item.reason],
+  ];
+  const csv = [
+    columns.map(([header]) => csvCell(header)).join(","),
+    ...items.map((item) => columns.map(([, getter]) => csvCell(getter(item) ?? "-")).join(",")),
+  ].join("\n");
+  const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `sportshunter_filtered_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setFooter(`\u5df2\u5bfc\u51fa ${items.length} \u573a\u5f53\u524d\u7b5b\u9009\u63a8\u8350\u3002`);
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return `"${text.replaceAll('"', '""')}"`;
 }
 
 function sortRecommendations(items) {
@@ -824,6 +922,19 @@ $("telegram-button").addEventListener("click", checkTelegramAlerts);
 $("apply-optimizer-button").addEventListener("click", applyOptimizerSuggestions);
 $("recommendation-sort").addEventListener("change", (event) => {
   state.recommendationSort = event.target.value || "confidence";
-  refreshDashboard();
+  renderRecommendations(state.recommendationItems);
 });
+$("recommendation-signal-filter").addEventListener("change", (event) => {
+  state.recommendationSignalFilter = event.target.value || "all";
+  renderRecommendations(state.recommendationItems);
+});
+$("recommendation-league-filter").addEventListener("change", (event) => {
+  state.recommendationLeagueFilter = event.target.value || "all";
+  renderRecommendations(state.recommendationItems);
+});
+$("recommendation-time-filter").addEventListener("change", (event) => {
+  state.recommendationTimeFilter = event.target.value || "all";
+  renderRecommendations(state.recommendationItems);
+});
+$("recommendation-export-button").addEventListener("click", exportCurrentRecommendations);
 refreshDashboard();

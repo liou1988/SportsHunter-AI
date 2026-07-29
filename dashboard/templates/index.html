@@ -175,7 +175,33 @@
                 <option value="signal">&#20449;&#21495;&#20248;&#20808;</option>
               </select>
             </label>
-            <a class="text-button export-button" href="/api/recommendations/export.csv" target="_blank" rel="noreferrer">&#19968;&#38190;&#23548;&#20986;</a>
+            <label class="filter-control" for="recommendation-signal-filter">
+              <span>&#20449;&#21495;</span>
+              <select id="recommendation-signal-filter">
+                <option value="all">&#20840;&#37096;&#20449;&#21495;</option>
+                <option value="STRONG_BUY">&#24378;&#28872;&#25512;&#33616;</option>
+                <option value="BUY">&#25512;&#33616;</option>
+                <option value="WATCH">&#35266;&#23519;</option>
+                <option value="PASS">&#36339;&#36807;</option>
+                <option value="BLOCK">&#39118;&#25511;&#25318;&#25130;</option>
+              </select>
+            </label>
+            <label class="filter-control" for="recommendation-league-filter">
+              <span>&#32852;&#36187;</span>
+              <select id="recommendation-league-filter">
+                <option value="all">&#20840;&#37096;&#32852;&#36187;</option>
+              </select>
+            </label>
+            <label class="filter-control" for="recommendation-time-filter">
+              <span>&#26102;&#38388;</span>
+              <select id="recommendation-time-filter">
+                <option value="all">&#20840;&#37096;&#26102;&#38388;</option>
+                <option value="today">&#20170;&#22825;</option>
+                <option value="upcoming">&#26410;&#24320;&#36187;</option>
+                <option value="next24h">24&#23567;&#26102;&#20869;</option>
+              </select>
+            </label>
+            <button class="text-button export-button" id="recommendation-export-button" type="button">&#23548;&#20986;&#24403;&#21069;&#31579;&#36873;</button>
             <a href="/api/recommendations/today" target="_blank" rel="noreferrer">&#26597;&#30475;&#25509;&#21475;</a>
           </div>
         </div>
@@ -261,6 +287,6 @@
 
     <footer id="last-updated">等待刷新</footer>
   </main>
-  <script src="/dashboard/static/app.js?v=20260729-time-scroll1"></script>
+  <script src="/dashboard/static/app.js?v=20260729-filter-export1"></script>
 </body>
 </html>
