@@ -7,6 +7,7 @@ from automation.health import SystemHealthCheck
 from collector.history import HistoricalCollector
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
+from optimizer.scheduler import run_scheduled_optimizer_check
 from telegram_bot.alerts import RecommendationAlertPusher
 
 
@@ -28,6 +29,10 @@ def save_results() -> dict:
 
 def daily_report() -> str:
     return EvaluationRunner().daily().to_markdown()
+
+
+def model_optimizer_check() -> dict:
+    return run_scheduled_optimizer_check()
 
 
 def telegram_recommendation_alerts() -> dict:

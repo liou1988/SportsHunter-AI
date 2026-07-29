@@ -11,6 +11,7 @@ from config.settings import get_settings
 from collector.history import HistoricalCollector
 from data_sync.engine import DataSync
 from evaluation.runner import EvaluationRunner
+from optimizer.scheduler import run_scheduled_optimizer_check
 from telegram_bot.alerts import RecommendationAlertPusher
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,12 @@ class AutomationRunner:
             self.evaluation.daily,
             **AUTOMATION_JOBS["daily_report"],
             id="daily_report",
+            replace_existing=True,
+        )
+        self.scheduler.add_job(
+            run_scheduled_optimizer_check,
+            **AUTOMATION_JOBS["model_optimizer_check"],
+            id="model_optimizer_check",
             replace_existing=True,
         )
         self.scheduler.add_job(self.health.write_status, "interval", minutes=10, id="system_status", replace_existing=True)

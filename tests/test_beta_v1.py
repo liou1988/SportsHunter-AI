@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -26,6 +27,7 @@ from evaluation.dataset import EvaluationDataset
 from evaluation.runner import EvaluationRunner
 from evaluation.settlement import SettlementService
 from optimizer.engine import ModelOptimizer
+from optimizer import scheduler as optimizer_scheduler
 from optimizer.weights import load_active_rating_weights
 from pipeline.archive import PredictionArchive
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
@@ -177,6 +179,10 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_ALERT_SIGNALS: ${TELEGRAM_ALERT_SIGNALS:-STRONG_BUY,BUY,WATCH}" in text
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES: ${TELEGRAM_ALERT_INTERVAL_MINUTES:-5}" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}" in text
+    assert "MODEL_OPTIMIZER_ENABLED: ${MODEL_OPTIMIZER_ENABLED:-true}" in text
+    assert "MODEL_OPTIMIZER_CHECK_HOUR: ${MODEL_OPTIMIZER_CHECK_HOUR:-1}" in text
+    assert "MODEL_OPTIMIZER_CHECK_MINUTE: ${MODEL_OPTIMIZER_CHECK_MINUTE:-20}" in text
+    assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED: ${MODEL_OPTIMIZER_AUTO_APPLY_ENABLED:-false}" in text
 
 
 def test_env_example_contains_triggered_alert_settings() -> None:
@@ -185,6 +191,10 @@ def test_env_example_contains_triggered_alert_settings() -> None:
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES=5" in text
     assert "TELEGRAM_ALERT_RETENTION_DAYS=7" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json" in text
+    assert "MODEL_OPTIMIZER_ENABLED=true" in text
+    assert "MODEL_OPTIMIZER_MANUAL_MIN_SAMPLES=20" in text
+    assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=false" in text
+    assert "MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES=50" in text
 
 
 def test_docker_compose_allows_free_provider_leagues_env_override() -> None:
@@ -351,6 +361,75 @@ def test_model_optimizer_suggests_and_applies_conservative_weights(mock_pipeline
         active_weights = load_active_rating_weights(session)
     assert active_weights != report.current_weights
     assert round(sum(active_weights.values()), 2) == 100.0
+
+
+def test_scheduled_model_optimizer_check_observes_before_manual_threshold(monkeypatch, tmp_path) -> None:
+    settings = Settings(
+        model_optimizer_status_path=tmp_path / "optimizer_status.json",
+        model_optimizer_manual_min_samples=20,
+        model_optimizer_auto_apply_enabled=False,
+        _env_file=None,
+    )
+
+    class FakeReport:
+        def to_dict(self) -> dict:
+            return {
+                "can_apply": True,
+                "sample_count": 3,
+                "suggestions": [{"module": "team_strength"}],
+            }
+
+    class FakeOptimizer:
+        def __init__(self, min_recommended_sample: int) -> None:
+            self.min_recommended_sample = min_recommended_sample
+
+        def build_report(self, period: str) -> FakeReport:
+            return FakeReport()
+
+        def apply(self, period: str) -> dict:
+            raise AssertionError("auto apply should not run before manual threshold")
+
+    monkeypatch.setattr(optimizer_scheduler, "ModelOptimizer", FakeOptimizer)
+    payload = optimizer_scheduler.run_scheduled_optimizer_check(settings)
+    saved = json.loads(settings.model_optimizer_status_path.read_text(encoding="utf-8"))
+
+    assert payload["action"] == "observe"
+    assert payload["applied"] is None
+    assert saved["action"] == "observe"
+    assert saved["report"]["sample_count"] == 3
+
+
+def test_scheduled_model_optimizer_check_uses_manual_review_at_threshold(monkeypatch, tmp_path) -> None:
+    settings = Settings(
+        model_optimizer_status_path=tmp_path / "optimizer_status.json",
+        model_optimizer_manual_min_samples=20,
+        model_optimizer_auto_apply_enabled=False,
+        _env_file=None,
+    )
+
+    class FakeReport:
+        def to_dict(self) -> dict:
+            return {
+                "can_apply": True,
+                "sample_count": 20,
+                "suggestions": [{"module": "team_strength"}],
+            }
+
+    class FakeOptimizer:
+        def __init__(self, min_recommended_sample: int) -> None:
+            self.min_recommended_sample = min_recommended_sample
+
+        def build_report(self, period: str) -> FakeReport:
+            return FakeReport()
+
+        def apply(self, period: str) -> dict:
+            raise AssertionError("auto apply is disabled")
+
+    monkeypatch.setattr(optimizer_scheduler, "ModelOptimizer", FakeOptimizer)
+    payload = optimizer_scheduler.run_scheduled_optimizer_check(settings)
+
+    assert payload["action"] == "manual_review"
+    assert payload["applied"] is None
 
 
 def test_signal_strategy_balanced_alert_thresholds() -> None:
@@ -863,6 +942,7 @@ def test_scheduler_registers_triggered_telegram_alert_job() -> None:
     scheduler = create_scheduler()
     job_ids = {job.id for job in scheduler.get_jobs()}
     assert "telegram_recommendation_alerts" in job_ids
+    assert "model_optimizer_check" in job_ids
     assert "telegram_daily_recommendations" not in job_ids
     if scheduler.running:
         scheduler.shutdown(wait=False)

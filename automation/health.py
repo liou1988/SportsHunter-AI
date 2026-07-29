@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ class SystemHealthCheck:
         statuses.append(ComponentStatus("Scheduler", "UNKNOWN", "Runtime scheduler status is process-local"))
         statuses.append(ComponentStatus("Prediction", "READY", "PredictionPipeline is importable"))
         statuses.append(ComponentStatus("Evaluation", "READY", "Evaluation reports can be generated"))
+        statuses.append(self.model_optimizer())
         return statuses
 
     def provider(self) -> ComponentStatus:
@@ -40,6 +42,19 @@ class SystemHealthCheck:
             return ComponentStatus("Database", "UP")
         except Exception as exc:  # noqa: BLE001
             return ComponentStatus("Database", "DOWN", str(exc))
+
+    def model_optimizer(self) -> ComponentStatus:
+        settings = get_settings()
+        path = settings.model_optimizer_status_path
+        if not path.exists():
+            return ComponentStatus("Model Optimizer", "PENDING", "No scheduled check has run yet")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return ComponentStatus("Model Optimizer", "UNKNOWN", str(exc))
+        action = payload.get("action", "unknown")
+        sample_count = ((payload.get("report") or {}).get("sample_count")) or 0
+        return ComponentStatus("Model Optimizer", str(action).upper(), f"samples={sample_count}")
 
     def write_status(self, path: Path | None = None) -> Path:
         settings = get_settings()

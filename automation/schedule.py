@@ -5,4 +5,5 @@ AUTOMATION_JOBS = {
     "refresh_live": {"trigger": "interval", "minutes": 5},
     "save_results": {"trigger": "cron", "hour": 23, "minute": 30},
     "daily_report": {"trigger": "cron", "hour": 1, "minute": 0},
+    "model_optimizer_check": {"trigger": "cron", "hour": 1, "minute": 20},
 }
