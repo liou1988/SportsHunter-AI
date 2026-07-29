@@ -49,6 +49,85 @@
       </div>
     </section>
 
+    <section class="dashboard-grid analytics-grid" aria-label="模型深度分析">
+      <section class="panel panel-wide">
+        <div class="panel-head">
+          <div>
+            <h2>模型表现</h2>
+            <p>近 30 天已结算推荐的命中率、收益和信心校准</p>
+          </div>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi-cell">
+            <span>已结算</span>
+            <strong id="settled-count">--</strong>
+          </div>
+          <div class="kpi-cell">
+            <span>命中率</span>
+            <strong id="hit-rate">--</strong>
+          </div>
+          <div class="kpi-cell">
+            <span>ROI</span>
+            <strong id="roi">--</strong>
+          </div>
+          <div class="kpi-cell">
+            <span>信心误差</span>
+            <strong id="calibration-error">--</strong>
+          </div>
+        </div>
+        <div class="chart-split">
+          <div>
+            <h3>预测趋势</h3>
+            <div id="prediction-trend" class="trend-chart"></div>
+          </div>
+          <div>
+            <h3>信号分布</h3>
+            <div id="signal-chart" class="bar-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>模块偏差</h2>
+            <p>未命中样本的主要偏差来源</p>
+          </div>
+        </div>
+        <div id="module-errors" class="bar-list padded-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>联赛表现</h2>
+            <p>按已结算样本统计命中率</p>
+          </div>
+        </div>
+        <div id="league-performance" class="rank-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>盘口表现</h2>
+            <p>胜平负、大小球、让球命中情况</p>
+          </div>
+        </div>
+        <div id="market-performance" class="bar-list padded-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>风险分布</h2>
+            <p>近 30 天预测风险层级</p>
+          </div>
+        </div>
+        <div id="risk-chart" class="bar-list padded-list"></div>
+      </section>
+    </section>
+
     <section class="dashboard-grid">
       <section class="panel panel-wide">
         <div class="panel-head">

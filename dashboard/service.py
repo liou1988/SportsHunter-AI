@@ -12,6 +12,8 @@ from database.repositories import DashboardRepository
 from database.session import SessionLocal
 from datahub.hub import DataHub
 from datahub.models import Fixture, Odds, OddsMarket, to_plain_dict
+from evaluation.dataset import EvaluationDataset
+from evaluation.metrics import calculate_metrics
 from evaluation.runner import EvaluationRunner
 from pipeline.runner import PredictionPipeline
 from telegram_bot.localization import (
@@ -36,6 +38,7 @@ def build_dashboard_summary(
         "provider": _provider_status(datahub),
         "database": database,
         "recommendations": _archived_recommendation_status(database),
+        "analytics": _analytics_status(database),
         "reports": _report_status(settings),
     }
 
@@ -50,8 +53,12 @@ def run_daily_evaluation(settings: Settings | None = None) -> dict[str, Any]:
             "date": report.report_date.isoformat(),
             "settled_count": report.settled_count,
             "learning_records_created": report.learning_records_created,
+            "overview": report.overview,
             "wins": report.wins,
             "losses": report.losses,
+            "confidence_notes": report.confidence_notes,
+            "risk_notes": report.risk_notes,
+            "module_contributions": report.module_contributions,
             "module_notes": report.module_notes,
             "metrics": {
                 "hunter_hit_rate": report.metrics.hunter_hit_rate,
@@ -162,6 +169,7 @@ def _database_status() -> dict[str, Any]:
         with SessionLocal() as session:
             summary = DashboardRepository(session).summary()
         summary["latest_predictions"] = [_localize_prediction_item(item) for item in summary.get("latest_predictions", [])]
+        summary["analytics"] = _localize_analytics(summary.get("analytics", {}))
         return {"health": "ok", "error": None, **summary}
     except Exception as exc:  # noqa: BLE001 - fresh deployments may not have migrated yet
         logger.warning("dashboard database summary unavailable: %s", exc)
@@ -170,6 +178,7 @@ def _database_status() -> dict[str, Any]:
             "error": str(exc),
             "counts": {},
             "latest_predictions": [],
+            "analytics": _empty_analytics(),
         }
 
 
@@ -204,6 +213,227 @@ def _report_status(settings: Settings) -> dict[str, Any]:
         "daily_report": _file_payload(daily_path),
         "system_status": _file_payload(settings.system_status_path),
     }
+
+
+def _analytics_status(database: dict[str, Any]) -> dict[str, Any]:
+    analytics = {**_empty_analytics(), **dict(database.get("analytics") or {})}
+    try:
+        rows = EvaluationDataset().rows("monthly")
+        analytics["performance"] = _performance_snapshot(rows)
+    except Exception as exc:  # noqa: BLE001 - dashboard can still show operational status
+        logger.warning("dashboard performance analytics unavailable: %s", exc)
+        analytics["performance"] = _empty_performance()
+        analytics["error"] = str(exc)
+    return analytics
+
+
+def _localize_analytics(analytics: dict[str, Any]) -> dict[str, Any]:
+    localized = dict(analytics or {})
+    localized["signal_distribution"] = [
+        {**item, "signal_label": translate_signal(str(item.get("signal") or ""))}
+        for item in localized.get("signal_distribution", [])
+    ]
+    localized["league_activity"] = [
+        {**item, "league": translate_league_name(str(item.get("league") or ""))}
+        for item in localized.get("league_activity", [])
+    ]
+    localized["risk_distribution"] = [
+        {**item, "risk_label": _risk_label(str(item.get("risk_level") or ""))}
+        for item in localized.get("risk_distribution", [])
+    ]
+    localized["latest_settled"] = [
+        _localize_settled_item(item)
+        for item in localized.get("latest_settled", [])
+    ]
+    return localized
+
+
+def _performance_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics = calculate_metrics(rows)
+    actionable_rows = [row for row in rows if row.get("actionable", True)]
+    scored_rows = actionable_rows or rows
+    wins = sum(1 for row in scored_rows if row.get("won"))
+    losses = max(0, len(scored_rows) - wins)
+    avg_confidence = _average([row.get("confidence") for row in scored_rows])
+    avg_hunter_score = _average([row.get("hunter_score") for row in scored_rows])
+    return {
+        "period": "monthly",
+        "settled_count": len(rows),
+        "actionable_count": len(actionable_rows),
+        "wins": wins,
+        "losses": losses,
+        "hit_rate": metrics.signal_hit_rate,
+        "roi": metrics.roi,
+        "avg_confidence": avg_confidence,
+        "avg_hunter_score": avg_hunter_score,
+        "calibration_error": metrics.confidence_calibration_error,
+        "league_performance": _league_performance(scored_rows),
+        "market_performance": _market_performance(rows),
+        "module_errors": _module_errors(rows),
+        "score_buckets": _settled_score_buckets(scored_rows),
+        "confidence_bands": _confidence_bands(scored_rows),
+    }
+
+
+def _empty_performance() -> dict[str, Any]:
+    return {
+        "period": "monthly",
+        "settled_count": 0,
+        "actionable_count": 0,
+        "wins": 0,
+        "losses": 0,
+        "hit_rate": 0.0,
+        "roi": 0.0,
+        "avg_confidence": 0.0,
+        "avg_hunter_score": 0.0,
+        "calibration_error": 0.0,
+        "league_performance": [],
+        "market_performance": [],
+        "module_errors": [],
+        "score_buckets": [],
+        "confidence_bands": [],
+    }
+
+
+def _empty_analytics() -> dict[str, Any]:
+    return {
+        "period_days": 30,
+        "prediction_trend": [],
+        "signal_distribution": [],
+        "risk_distribution": [],
+        "score_buckets": [],
+        "league_activity": [],
+        "latest_settled": [],
+    }
+
+
+def _league_performance(rows: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+    grouped = _group_rows(rows, "league")
+    items = []
+    for league, league_rows in grouped.items():
+        wins = sum(1 for row in league_rows if row.get("won"))
+        stake = sum(float(row.get("stake") or 0) for row in league_rows) or 1.0
+        profit = sum(float(row.get("profit") or 0) for row in league_rows)
+        items.append(
+            {
+                "league": translate_league_name(league),
+                "count": len(league_rows),
+                "wins": wins,
+                "losses": len(league_rows) - wins,
+                "hit_rate": wins / len(league_rows) if league_rows else 0.0,
+                "roi": profit / stake,
+                "avg_score": _average([row.get("hunter_score") for row in league_rows]),
+            }
+        )
+    return sorted(items, key=lambda item: (-int(item["count"]), -float(item["hit_rate"]), str(item["league"])))[:limit]
+
+
+def _market_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    markets = [
+        ("moneyline", "胜平负"),
+        ("totals", "大小球"),
+        ("handicap", "让球"),
+    ]
+    items = []
+    for market, label in markets:
+        hits = []
+        for row in rows:
+            value = (row.get("market_results") or {}).get(market)
+            if value is not None:
+                hits.append(bool(value))
+        wins = sum(1 for value in hits if value)
+        items.append(
+            {
+                "market": market,
+                "label": label,
+                "count": len(hits),
+                "wins": wins,
+                "hit_rate": wins / len(hits) if hits else 0.0,
+            }
+        )
+    return items
+
+
+def _module_errors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    losses = [row for row in rows if row.get("actionable", True) and not row.get("won")]
+    grouped = _group_rows(losses, "primary_error_module")
+    items = [
+        {
+            "module": module,
+            "label": _module_label(module),
+            "count": len(module_rows),
+            "avg_score_error": _average([row.get("score_error") for row in module_rows]),
+        }
+        for module, module_rows in grouped.items()
+    ]
+    return sorted(items, key=lambda item: (-int(item["count"]), str(item["label"])))
+
+
+def _settled_score_buckets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets = [
+        ("90+", 90.0, 101.0),
+        ("85-89", 85.0, 90.0),
+        ("80-84", 80.0, 85.0),
+        ("60-79", 60.0, 80.0),
+        ("60以下", 0.0, 60.0),
+    ]
+    items = []
+    for label, floor, ceiling in buckets:
+        bucket_rows = [
+            row
+            for row in rows
+            if row.get("hunter_score") is not None and floor <= float(row["hunter_score"]) < ceiling
+        ]
+        wins = sum(1 for row in bucket_rows if row.get("won"))
+        items.append(
+            {
+                "bucket": label,
+                "count": len(bucket_rows),
+                "wins": wins,
+                "hit_rate": wins / len(bucket_rows) if bucket_rows else 0.0,
+            }
+        )
+    return items
+
+
+def _confidence_bands(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    bands = [
+        ("0.85+", 0.85, 1.01),
+        ("0.70-0.84", 0.70, 0.85),
+        ("0.50-0.69", 0.50, 0.70),
+        ("0.50以下", 0.0, 0.50),
+    ]
+    items = []
+    for label, floor, ceiling in bands:
+        band_rows = [
+            row
+            for row in rows
+            if row.get("confidence") is not None and floor <= float(row["confidence"]) < ceiling
+        ]
+        wins = sum(1 for row in band_rows if row.get("won"))
+        items.append(
+            {
+                "band": label,
+                "count": len(band_rows),
+                "wins": wins,
+                "hit_rate": wins / len(band_rows) if band_rows else 0.0,
+            }
+        )
+    return items
+
+
+def _group_rows(rows: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get(key) or "unknown"), []).append(row)
+    return grouped
+
+
+def _average(values: list[Any]) -> float:
+    numbers = [float(value) for value in values if value is not None]
+    if not numbers:
+        return 0.0
+    return round(sum(numbers) / len(numbers), 4)
 
 
 def _file_payload(path: Path) -> dict[str, Any]:
@@ -281,3 +511,49 @@ def _localize_prediction_item(item: dict[str, Any]) -> dict[str, Any]:
     if localized.get("signal"):
         localized["signal_label"] = translate_signal(str(localized["signal"]))
     return localized
+
+
+def _localize_settled_item(item: dict[str, Any]) -> dict[str, Any]:
+    localized = dict(item)
+    if localized.get("fixture"):
+        localized["fixture"] = translate_match_text(str(localized["fixture"]))
+    if localized.get("league"):
+        localized["league"] = translate_league_name(str(localized["league"]))
+    if localized.get("signal"):
+        localized["signal_label"] = translate_signal(str(localized["signal"]))
+    if localized.get("predicted_side"):
+        localized["predicted_side"] = translate_match_text(str(localized["predicted_side"]))
+    localized["result_label"] = "命中" if localized.get("hit") else "未中"
+    return localized
+
+
+def _module_label(module: str) -> str:
+    return {
+        "aligned_signal": "信号一致性",
+        "score_projection": "比分预测",
+        "totals_market": "大小球盘口",
+        "handicap_market": "让球盘口",
+        "signal": "最终信号",
+        "unknown": "未知模块",
+        "team_strength": "球队实力",
+        "recent_form": "近期状态",
+        "attack": "进攻指数",
+        "defense": "防守指数",
+        "home_advantage": "主场优势",
+        "odds_movement": "赔率变化",
+        "market_heat": "市场热度",
+        "league_strength": "联赛强度",
+        "fatigue": "体能疲劳",
+        "injury": "伤停风险",
+        "live_momentum": "滚球动能",
+    }.get(str(module), str(module))
+
+
+def _risk_label(risk_level: str) -> str:
+    return {
+        "LOW": "低风险",
+        "MEDIUM": "中风险",
+        "HIGH": "高风险",
+        "BLOCK": "风控拦截",
+        "UNKNOWN": "未知",
+    }.get(str(risk_level), str(risk_level))

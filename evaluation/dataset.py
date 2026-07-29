@@ -84,6 +84,16 @@ def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.Mat
         "home_score": result.home_score,
         "away_score": result.away_score,
         "winner": winner_side,
+        "moneyline_pick": moneyline_pick,
+        "predicted_score": _predicted_score_text(score_prediction),
+        "predicted_home_score": score_prediction.get("home"),
+        "predicted_away_score": score_prediction.get("away"),
+        "total_goals_label": total_goals.get("label"),
+        "total_goals_pick": total_goals.get("pick"),
+        "total_goals_line": total_goals.get("line"),
+        "handicap_label": handicap.get("label"),
+        "handicap_side": handicap.get("side"),
+        "handicap_line": handicap.get("line"),
         "won": won if actionable else False,
         "actionable": actionable,
         "profit": _profit(stake, won) if actionable else 0.0,
@@ -120,6 +130,14 @@ def _score_error(score_prediction: dict[str, Any], home_score: int | None, away_
     if predicted_home is None or predicted_away is None:
         return None
     return abs(int(predicted_home) - home_score) + abs(int(predicted_away) - away_score)
+
+
+def _predicted_score_text(score_prediction: dict[str, Any]) -> str:
+    predicted_home = score_prediction.get("home")
+    predicted_away = score_prediction.get("away")
+    if predicted_home is None or predicted_away is None:
+        return "-"
+    return f"{predicted_home}-{predicted_away}"
 
 
 def _total_goals_hit(total_goals: dict[str, Any], home_score: int | None, away_score: int | None) -> bool | None:
@@ -180,10 +198,20 @@ def _learning_note(row: dict) -> str:
     if row.get("won"):
         return (
             "推荐方向命中，当前评分、风险和市场信号保持一致；"
+            f"预测比分 {row.get('predicted_score')}，实际比分 {_result_score(row)}，"
             f"比分误差 {row.get('score_error')}，大小球 {row.get('total_goals_hit')}，让球 {row.get('handicap_hit')}。"
         )
     module = row.get("primary_error_module") or "unknown"
     return (
         f"推荐未命中，需要复核 {module}；"
+        f"预测比分 {row.get('predicted_score')}，实际比分 {_result_score(row)}，"
         f"比分误差 {row.get('score_error')}，大小球 {row.get('total_goals_hit')}，让球 {row.get('handicap_hit')}。"
     )
+
+
+def _result_score(row: dict) -> str:
+    home_score = row.get("home_score")
+    away_score = row.get("away_score")
+    if home_score is None or away_score is None:
+        return "-"
+    return f"{home_score}-{away_score}"

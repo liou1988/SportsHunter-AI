@@ -23,8 +23,12 @@ class EvaluationReport:
     metrics: EvaluationMetrics
     settled_count: int = 0
     learning_records_created: int = 0
+    overview: list[str] = field(default_factory=list)
     wins: list[str] = field(default_factory=list)
     losses: list[str] = field(default_factory=list)
+    confidence_notes: list[str] = field(default_factory=list)
+    risk_notes: list[str] = field(default_factory=list)
+    module_contributions: list[str] = field(default_factory=list)
     module_notes: list[str] = field(default_factory=list)
 
     def to_markdown(self) -> str:
@@ -40,6 +44,9 @@ class EvaluationReport:
             f"- 信心校准误差：{self.metrics.confidence_calibration_error:.4f}",
             f"- ROI: {self.metrics.roi:.2%}",
             "",
+            "## 核心结论",
+            *_format_list_items(self.overview),
+            "",
             "## 联赛表现",
             *_format_rate_items(self.metrics.by_league, value_map=_translate_metric_name),
             "",
@@ -51,6 +58,15 @@ class EvaluationReport:
             "",
             "## 未命中原因",
             *_format_list_items(self.losses),
+            "",
+            "## 信心校准",
+            *_format_list_items(self.confidence_notes),
+            "",
+            "## 风险分层",
+            *_format_list_items(self.risk_notes),
+            "",
+            "## 模块贡献",
+            *_format_list_items(self.module_contributions),
             "",
             "## 调整建议",
             *_format_list_items(self.module_notes),

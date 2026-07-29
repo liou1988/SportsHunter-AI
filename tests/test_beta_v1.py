@@ -310,8 +310,13 @@ def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path
     assert report.wins
     assert report.losses == ["本周期暂无未命中推荐。"]
     assert "# SportsHunter-AI 每日复盘" in report.to_markdown()
+    assert "## 核心结论" in report.to_markdown()
     assert "## 命中原因" in report.to_markdown()
     assert "## 未命中原因" in report.to_markdown()
+    assert "## 信心校准" in report.to_markdown()
+    assert "## 模块贡献" in report.to_markdown()
+    assert report.overview
+    assert report.confidence_notes
     assert (tmp_path / "daily_report.md").exists()
 
 
@@ -370,6 +375,9 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
     assert "今日推荐归档" in response.text
+    assert "模型表现" in response.text
+    assert "模块偏差" in response.text
+    assert "盘口表现" in response.text
 
 
 def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
@@ -385,6 +393,10 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert payload["provider"]["health"] in {"unknown", "ok"}
     assert payload["recommendations"]["source"] == "predictions_archive"
     assert "database" in payload
+    assert "analytics" in payload
+    assert "performance" in payload["analytics"]
+    assert "signal_distribution" in payload["analytics"]
+    assert "prediction_trend" in payload["analytics"]
     assert "reports" in payload
 
 

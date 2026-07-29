@@ -70,6 +70,7 @@ function renderSummary(payload) {
   const database = payload.database || {};
   const recommendations = payload.recommendations || {};
   const reports = payload.reports || {};
+  const analytics = payload.analytics || {};
   const counts = database.counts || {};
 
   $("provider-health").textContent = translateHealth(provider.health);
@@ -100,10 +101,111 @@ function renderSummary(payload) {
 
   renderRecommendations(recommendations.items || []);
   renderLatestPredictions(database.latest_predictions || []);
+  renderAnalytics(analytics);
 
   const daily = reports.daily_report || {};
   $("daily-report").textContent = daily.content || "暂无已生成复盘报告。";
   setFooter(`最后刷新：${formatTime(payload.generated_at)}`);
+}
+
+function renderAnalytics(analytics) {
+  const performance = analytics.performance || {};
+  $("settled-count").textContent = performance.settled_count ?? "--";
+  $("hit-rate").textContent = formatPercent(performance.hit_rate);
+  $("roi").textContent = formatPercent(performance.roi);
+  $("roi").className = Number(performance.roi || 0) >= 0 ? "good" : "bad";
+  $("calibration-error").textContent = formatNumber(performance.calibration_error);
+
+  renderTrend(analytics.prediction_trend || []);
+  renderBarList("signal-chart", analytics.signal_distribution || [], {
+    label: (item) => item.signal_label || translateSignal(item.signal),
+    value: (item) => item.count,
+    meta: (item) => `均分 ${formatNumber(item.avg_score)} · 信心 ${formatNumber(item.avg_confidence)}`,
+  });
+  renderBarList("risk-chart", analytics.risk_distribution || [], {
+    label: (item) => item.risk_label || item.risk_level || "-",
+    value: (item) => item.count,
+    meta: (item) => `平均风险 ${formatNumber(item.avg_risk_score)}`,
+  });
+  renderBarList("module-errors", (performance.module_errors || []).slice(0, 6), {
+    label: (item) => item.label || item.module || "-",
+    value: (item) => item.count,
+    meta: (item) => `平均比分误差 ${formatNumber(item.avg_score_error)}`,
+    empty: "暂无明显模块偏差。",
+  });
+  renderBarList("market-performance", performance.market_performance || [], {
+    label: (item) => item.label || translateMarket(item.market),
+    value: (item) => item.hit_rate,
+    meta: (item) => `${formatNumber(item.wins)} / ${formatNumber(item.count)} 场`,
+    percentValue: true,
+    empty: "暂无盘口复盘数据。",
+  });
+  renderRankList("league-performance", performance.league_performance || []);
+}
+
+function renderTrend(items) {
+  const root = $("prediction-trend");
+  root.classList.toggle("empty-state", !items.length);
+  if (!items.length) {
+    root.innerHTML = `<p class="muted">暂无趋势数据。</p>`;
+    return;
+  }
+  const max = Math.max(1, ...items.map((item) => Number(item.count || 0)));
+  root.innerHTML = items.map((item) => {
+    const height = Math.max(6, Math.round((Number(item.count || 0) / max) * 96));
+    return `
+      <div class="trend-bar" title="${escapeHtml(formatDateShort(item.date))}：${formatNumber(item.count)} 场">
+        <span style="height:${height}px"></span>
+        <small>${escapeHtml(formatDateShort(item.date))}</small>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderBarList(id, items, options) {
+  const root = $(id);
+  root.classList.toggle("empty-state", !items.length);
+  if (!items.length) {
+    root.innerHTML = `<p class="muted">${escapeHtml(options.empty || "暂无数据。")}</p>`;
+    return;
+  }
+  const max = Math.max(
+    1,
+    ...items.map((item) => Number(options.percentValue ? item.hit_rate || 0 : options.value(item) || 0))
+  );
+  root.innerHTML = items.map((item) => {
+    const raw = Number(options.percentValue ? item.hit_rate || 0 : options.value(item) || 0);
+    const width = options.percentValue ? Math.round(raw * 100) : Math.round((raw / max) * 100);
+    const valueText = options.percentValue ? formatPercent(raw) : formatNumber(raw);
+    return `
+      <div class="bar-row">
+        <div class="bar-head">
+          <strong>${escapeHtml(options.label(item))}</strong>
+          <span>${valueText}</span>
+        </div>
+        <div class="bar-track"><span style="width:${Math.max(3, width)}%"></span></div>
+        <small>${escapeHtml(options.meta ? options.meta(item) : "")}</small>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderRankList(id, items) {
+  const root = $(id);
+  if (!items.length) {
+    root.innerHTML = `<p class="muted">暂无联赛复盘数据。</p>`;
+    return;
+  }
+  root.innerHTML = items.map((item, index) => `
+    <div class="rank-row">
+      <span>${index + 1}</span>
+      <div>
+        <strong>${escapeHtml(item.league || "-")}</strong>
+        <small>${formatNumber(item.wins)}胜 ${formatNumber(item.losses)}负 · ROI ${formatPercent(item.roi)}</small>
+      </div>
+      <strong>${formatPercent(item.hit_rate)}</strong>
+    </div>
+  `).join("");
 }
 
 function renderDataQuality(payload) {
@@ -342,6 +444,14 @@ function formatDateKey(value) {
     return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
   }
   return value || "-";
+}
+
+function formatDateShort(value) {
+  const text = String(value || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return `${text.slice(5, 7)}/${text.slice(8, 10)}`;
+  }
+  return text || "-";
 }
 
 function formatCount(value) {

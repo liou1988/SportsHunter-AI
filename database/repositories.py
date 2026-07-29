@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -309,6 +309,7 @@ class DashboardRepository:
                 "odds_snapshots": self._count(orm.OddsSnapshot),
             },
             "latest_predictions": self.latest_predictions(),
+            "analytics": self.analytics(),
         }
 
     def latest_predictions(self, limit: int = 8) -> list[dict]:
@@ -339,8 +340,131 @@ class DashboardRepository:
             )
         return items
 
+    def analytics(self, days: int = 30) -> dict:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        predictions = list(
+            self.session.scalars(
+                select(orm.Prediction)
+                .where(orm.Prediction.created_at >= since)
+                .order_by(orm.Prediction.created_at.asc())
+            )
+        )
+        return {
+            "period_days": days,
+            "prediction_trend": self._prediction_trend(predictions, days=14),
+            "signal_distribution": self._signal_distribution(predictions),
+            "risk_distribution": self._risk_distribution(predictions),
+            "score_buckets": self._score_buckets(predictions),
+            "league_activity": self._league_activity(predictions),
+            "latest_settled": self._latest_settled(),
+        }
+
     def _count(self, model: type) -> int:
         return int(self.session.scalar(select(func.count()).select_from(model)) or 0)
+
+    def _prediction_trend(self, predictions: list[orm.Prediction], days: int) -> list[dict]:
+        today = datetime.now(timezone.utc).date()
+        counts = {
+            (today - timedelta(days=offset)).isoformat(): 0
+            for offset in range(days - 1, -1, -1)
+        }
+        for prediction in predictions:
+            key = prediction.created_at.date().isoformat()
+            if key in counts:
+                counts[key] += 1
+        return [{"date": day, "count": count} for day, count in counts.items()]
+
+    def _signal_distribution(self, predictions: list[orm.Prediction]) -> list[dict]:
+        grouped: dict[str, list[orm.Prediction]] = {}
+        for prediction in predictions:
+            grouped.setdefault(prediction.signal or "UNKNOWN", []).append(prediction)
+        return [
+            {
+                "signal": signal,
+                "count": len(items),
+                "avg_score": _average([item.hunter_score for item in items]),
+                "avg_confidence": _average([item.confidence for item in items]),
+            }
+            for signal, items in sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0]))
+        ]
+
+    def _risk_distribution(self, predictions: list[orm.Prediction]) -> list[dict]:
+        grouped: dict[str, list[orm.Prediction]] = {}
+        for prediction in predictions:
+            grouped.setdefault(prediction.risk_level or "UNKNOWN", []).append(prediction)
+        return [
+            {
+                "risk_level": risk_level,
+                "count": len(items),
+                "avg_risk_score": _average([item.risk_score for item in items]),
+            }
+            for risk_level, items in sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0]))
+        ]
+
+    def _score_buckets(self, predictions: list[orm.Prediction]) -> list[dict]:
+        buckets = [
+            ("90+", 90.0, 101.0),
+            ("85-89", 85.0, 90.0),
+            ("80-84", 80.0, 85.0),
+            ("60-79", 60.0, 80.0),
+            ("60以下", 0.0, 60.0),
+        ]
+        rows: list[dict] = []
+        for label, floor, ceiling in buckets:
+            items = [
+                prediction
+                for prediction in predictions
+                if prediction.hunter_score is not None and floor <= float(prediction.hunter_score) < ceiling
+            ]
+            rows.append(
+                {
+                    "bucket": label,
+                    "count": len(items),
+                    "avg_confidence": _average([item.confidence for item in items]),
+                }
+            )
+        return rows
+
+    def _league_activity(self, predictions: list[orm.Prediction], limit: int = 8) -> list[dict]:
+        grouped: dict[str, list[orm.Prediction]] = {}
+        for prediction in predictions:
+            fixture = prediction.fixture
+            league = fixture.league.name if fixture and fixture.league else "unknown"
+            grouped.setdefault(league, []).append(prediction)
+        rows = [
+            {
+                "league": league,
+                "count": len(items),
+                "actionable_count": sum(1 for item in items if item.signal not in {"PASS", "BLOCK"} and float(item.stake or 0) > 0),
+                "avg_score": _average([item.hunter_score for item in items]),
+            }
+            for league, items in grouped.items()
+        ]
+        return sorted(rows, key=lambda row: (-int(row["count"]), str(row["league"])))[:limit]
+
+    def _latest_settled(self, limit: int = 6) -> list[dict]:
+        rows = self.session.execute(
+            select(orm.Prediction, orm.Fixture, orm.MatchResult)
+            .join(orm.Fixture, orm.Prediction.fixture_id == orm.Fixture.id)
+            .join(orm.MatchResult, orm.MatchResult.fixture_id == orm.Fixture.id)
+            .order_by(orm.MatchResult.settled_at.desc(), orm.Prediction.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [
+            {
+                "prediction_id": prediction.id,
+                "fixture": f"{fixture.home_team.name} vs {fixture.away_team.name}",
+                "league": fixture.league.name if fixture.league else "unknown",
+                "signal": prediction.signal,
+                "hunter_score": prediction.hunter_score,
+                "confidence": prediction.confidence,
+                "predicted_side": prediction.predicted_side,
+                "actual_score": _scoreline(result.home_score, result.away_score),
+                "hit": _prediction_hit(prediction, fixture, result),
+                "settled_at": result.settled_at.isoformat() if result.settled_at else None,
+            }
+            for prediction, fixture, result in rows
+        ]
 
 
 def _winner(home_score: int | None, away_score: int | None) -> str | None:
@@ -351,3 +475,29 @@ def _winner(home_score: int | None, away_score: int | None) -> str | None:
     if away_score > home_score:
         return "away"
     return "draw"
+
+
+def _average(values: list[float | None]) -> float:
+    numbers = [float(value) for value in values if value is not None]
+    if not numbers:
+        return 0.0
+    return round(sum(numbers) / len(numbers), 4)
+
+
+def _scoreline(home_score: int | None, away_score: int | None) -> str:
+    if home_score is None or away_score is None:
+        return "-"
+    return f"{home_score}-{away_score}"
+
+
+def _prediction_hit(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.MatchResult) -> bool:
+    winner = result.winner
+    market_prediction = (prediction.breakdown_json or {}).get("market_prediction", {})
+    moneyline_pick = str(market_prediction.get("moneyline_pick") or "").upper()
+    if winner == "draw":
+        return moneyline_pick == "DRAW"
+    if winner == "home":
+        return prediction.predicted_side == fixture.home_team.name or moneyline_pick == "HOME"
+    if winner == "away":
+        return prediction.predicted_side == fixture.away_team.name or moneyline_pick == "AWAY"
+    return False
