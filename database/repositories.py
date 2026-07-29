@@ -345,7 +345,13 @@ class DashboardRepository:
     def latest_predictions(self, limit: int = 8) -> list[dict]:
         predictions = list(
             self.session.scalars(
-                select(orm.Prediction).order_by(orm.Prediction.created_at.desc()).limit(limit)
+                select(orm.Prediction)
+                .order_by(
+                    orm.Prediction.confidence.desc(),
+                    orm.Prediction.hunter_score.desc(),
+                    orm.Prediction.created_at.desc(),
+                )
+                .limit(limit)
             )
         )
         items: list[dict] = []

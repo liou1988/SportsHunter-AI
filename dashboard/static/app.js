@@ -522,7 +522,14 @@ function renderRecommendations(items) {
     body.innerHTML = `<tr><td colspan="6">暂无归档推荐，点击“检查推送”后会自动写入。</td></tr>`;
     return;
   }
-  body.innerHTML = items.map((item) => {
+  const sortedItems = [...items].sort((a, b) => {
+    const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
+    if (confidenceDiff !== 0) return confidenceDiff;
+    const scoreDiff = Number(b.hunter_score || 0) - Number(a.hunter_score || 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+  });
+  body.innerHTML = sortedItems.map((item) => {
     const score = item.score_prediction || {};
     const total = item.total_goals || {};
     const handicap = item.handicap || {};
