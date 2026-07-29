@@ -355,4 +355,52 @@ def _normalize_name(value: str) -> str:
     return collapsed.casefold()
 
 
+
+
+# Supplemental names that appear in free provider feeds and archived recommendations.
+LEAGUE_LABELS.update({
+    "usa.usl.1": "美国USL冠军联赛",
+    "usa.usl.l1": "美国USL甲级联赛",
+})
+
+LEAGUE_LABELS_BY_NAME.update({
+    "USL Championship": "美国USL冠军联赛",
+    "USL League One": "美国USL甲级联赛",
+    "American USL Championship": "美国USL冠军联赛",
+    "American USL League One": "美国USL甲级联赛",
+})
+
+TEAM_NAME_TRANSLATIONS.update({
+    "Greenville Triumph": "格林维尔凯旋",
+    "Greenville Triumph SC": "格林维尔凯旋",
+    "AC Boise": "博伊西竞技",
+    "Athletic Club Boise": "博伊西竞技",
+    "Pittsburgh Riverhounds": "匹兹堡猎犬河队",
+    "Pittsburgh Riverhounds SC": "匹兹堡猎犬河队",
+    "FC Tulsa": "塔尔萨FC",
+    "Tulsa Roughnecks": "塔尔萨FC",
+    "Louisville City": "路易斯维尔城",
+    "Louisville City FC": "路易斯维尔城",
+    "Birmingham Legion": "伯明翰军团",
+    "Birmingham Legion FC": "伯明翰军团",
+    "Charleston Battery": "查尔斯顿电池",
+    "Tampa Bay Rowdies": "坦帕湾暴徒",
+    "Indy Eleven": "印地十一",
+    "North Carolina FC": "北卡罗来纳FC",
+    "Phoenix Rising FC": "凤凰城崛起",
+    "Sacramento Republic FC": "萨克拉门托共和",
+    "San Antonio FC": "圣安东尼奥FC",
+    "Orange County SC": "奥兰治县SC",
+    "Detroit City FC": "底特律城",
+    "Rhode Island FC": "罗德岛FC",
+    "Hartford Athletic": "哈特福德竞技",
+    "Loudoun United FC": "劳登联",
+    "New Mexico United": "新墨西哥联",
+    "Colorado Springs Switchbacks FC": "科罗拉多泉跃迁",
+    "El Paso Locomotive FC": "埃尔帕索火车头",
+    "Las Vegas Lights FC": "拉斯维加斯灯光",
+    "Monterey Bay FC": "蒙特雷湾FC",
+    "Oakland Roots SC": "奥克兰根源",
+})
+
 _TEAM_LOOKUP = {_normalize_name(key): value for key, value in TEAM_NAME_TRANSLATIONS.items()}
