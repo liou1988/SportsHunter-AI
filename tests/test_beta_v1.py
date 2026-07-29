@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import json
+from io import StringIO
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -33,7 +35,11 @@ from pipeline.archive import PredictionArchive
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
 from api import dependencies
-from api.services.recommendations import build_archived_recommendations, build_today_recommendations
+from api.services.recommendations import (
+    build_archived_recommendations,
+    build_recommendations_export_csv,
+    build_today_recommendations,
+)
 from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
@@ -350,6 +356,41 @@ def test_archived_recommendations_read_from_prediction_archive(mock_pipeline) ->
     assert payload["items"][0]["match"].count("对阵") == 1
     assert payload["items"][0]["score_prediction"]["text"] == result.market_prediction.score.text
 
+
+
+
+def test_recommendations_export_csv_contains_prediction_fields(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    csv_body = build_recommendations_export_csv(include_pass=True, session_factory=Session)
+    rows = list(csv.DictReader(StringIO(csv_body.lstrip("\ufeff"))))
+
+    assert rows
+    assert rows[0]["\u8054\u8d5b"]
+    assert "\u5bf9\u9635" in rows[0]["\u6bd4\u8d5b"]
+    assert rows[0]["\u4fe1\u53f7"] in {"\u5f3a\u70c8\u63a8\u8350", "\u63a8\u8350", "\u89c2\u5bdf", "\u8df3\u8fc7", "\u98ce\u63a7\u62e6\u622a"}
+    assert rows[0]["\u6bd4\u5206\u9884\u6d4b"] == result.market_prediction.score.text
+    assert rows[0]["\u5927\u5c0f\u7403"] == result.market_prediction.total_goals.label
+    assert rows[0]["\u8ba9\u7403"] == result.market_prediction.handicap.label
+
+
+def test_recommendations_export_csv_endpoint(monkeypatch) -> None:
+    def fake_export(include_pass: bool = False, limit: int = 200) -> str:
+        assert include_pass is True
+        assert limit == 3
+        return "\ufeff\u8054\u8d5b,\u6bd4\u8d5b\n\u5df4\u897f\u4e59\u7ea7\u8054\u8d5b,A \u5bf9\u9635 B\n"
+
+    monkeypatch.setattr(recommendations_router, "build_recommendations_export_csv", fake_export)
+    response = TestClient(app).get("/api/recommendations/export.csv?include_pass=true&limit=3")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+    assert "\u8054\u8d5b,\u6bd4\u8d5b" in response.text
 
 def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)

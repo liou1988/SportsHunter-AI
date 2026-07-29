@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import csv
+from io import StringIO
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -65,6 +67,66 @@ def build_archived_recommendations(
             "source": "predictions_archive",
             "error": str(exc),
         }
+
+
+def build_recommendations_export_csv(
+    include_pass: bool = False,
+    limit: int = 200,
+    session_factory: SessionFactory = SessionLocal,
+) -> str:
+    payload = build_archived_recommendations(include_pass=include_pass, limit=limit, session_factory=session_factory)
+    output = StringIO()
+    output.write("\ufeff")
+    writer = csv.DictWriter(output, fieldnames=_EXPORT_COLUMNS)
+    writer.writeheader()
+    for item in payload.get("items", []):
+        writer.writerow(_export_row(item))
+    return output.getvalue()
+
+
+_EXPORT_COLUMNS = [
+    "\u8054\u8d5b",
+    "\u6bd4\u8d5b",
+    "\u5f00\u8d5b\u65f6\u95f4",
+    "\u4fe1\u53f7",
+    "Hunter\u8bc4\u5206",
+    "\u4fe1\u5fc3",
+    "\u9884\u6d4b\u65b9\u5411",
+    "\u4ed3\u4f4d",
+    "\u6bd4\u5206\u9884\u6d4b",
+    "\u5927\u5c0f\u7403",
+    "\u8ba9\u7403",
+    "\u8d54\u7387\u516c\u53f8",
+    "\u6b27\u8d54\u4e3b\u80dc",
+    "\u6b27\u8d54\u5e73\u5c40",
+    "\u6b27\u8d54\u5ba2\u80dc",
+    "\u63a8\u8350\u7406\u7531",
+]
+
+
+def _export_row(item: dict[str, Any]) -> dict[str, Any]:
+    odds = item.get("odds") if isinstance(item.get("odds"), dict) else {}
+    score = item.get("score_prediction") if isinstance(item.get("score_prediction"), dict) else {}
+    total = item.get("total_goals") if isinstance(item.get("total_goals"), dict) else {}
+    handicap = item.get("handicap") if isinstance(item.get("handicap"), dict) else {}
+    return {
+        "\u8054\u8d5b": item.get("league", "-"),
+        "\u6bd4\u8d5b": item.get("match", "-"),
+        "\u5f00\u8d5b\u65f6\u95f4": item.get("kickoff", "-"),
+        "\u4fe1\u53f7": translate_signal(str(item.get("signal", ""))) if item.get("signal") else "-",
+        "Hunter\u8bc4\u5206": item.get("hunter_score", "-"),
+        "\u4fe1\u5fc3": item.get("confidence", "-"),
+        "\u9884\u6d4b\u65b9\u5411": item.get("predicted_side") or "-",
+        "\u4ed3\u4f4d": item.get("stake") or "-",
+        "\u6bd4\u5206\u9884\u6d4b": score.get("text") or "-",
+        "\u5927\u5c0f\u7403": total.get("label") or "-",
+        "\u8ba9\u7403": handicap.get("label") or "-",
+        "\u8d54\u7387\u516c\u53f8": odds.get("bookmaker") or odds.get("provider") or "-",
+        "\u6b27\u8d54\u4e3b\u80dc": odds.get("home") or "-",
+        "\u6b27\u8d54\u5e73\u5c40": odds.get("draw") or "-",
+        "\u6b27\u8d54\u5ba2\u80dc": odds.get("away") or "-",
+        "\u63a8\u8350\u7406\u7531": item.get("reason") or "-",
+    }
 
 
 def _recommendation_item(pipeline: PredictionPipeline, result: PredictionResult, prediction_id: int | None = None) -> dict:
