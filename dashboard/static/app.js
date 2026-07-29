@@ -520,7 +520,7 @@ function renderQualityFixtures(fixtures, errors) {
 function renderRecommendations(items) {
   const body = $("recommendations-body");
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="6">暂无归档推荐，点击“检查推送”后会自动写入。</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7">&#26242;&#26080;&#24402;&#26723;&#25512;&#33616;&#65292;&#28857;&#20987;&#8220;&#26816;&#26597;&#25512;&#36865;&#8221;&#21518;&#20250;&#33258;&#21160;&#20889;&#20837;&#12290;</td></tr>`;
     return;
   }
   const sortedItems = sortRecommendations(items);
@@ -533,6 +533,10 @@ function renderRecommendations(items) {
         <td>
           <strong>${escapeHtml(item.match || "-")}</strong>
           <small>${escapeHtml(item.league || "-")}</small>
+        </td>
+        <td class="time-cell">
+          <strong>${escapeHtml(formatKickoffShort(item.kickoff))}</strong>
+          <small>&#21271;&#20140;&#26102;&#38388;</small>
         </td>
         <td>
           <span class="badge">${escapeHtml(item.signal_label || translateSignal(item.signal))}</span>
@@ -743,6 +747,19 @@ function formatSeconds(value) {
   const number = Number(value);
   if (Number.isNaN(number)) return String(value);
   return `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")} 秒`;
+}
+
+function formatKickoffShort(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function formatTime(value) {

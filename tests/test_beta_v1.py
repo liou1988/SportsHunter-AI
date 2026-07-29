@@ -16,7 +16,7 @@ from config.settings import Settings
 from config.logging import SensitiveDataFilter
 from database.base import Base
 from database.models import LearningRecord, MatchResult, ModelVersion, OddsSnapshot, Prediction
-from database.repositories import SportsRepository
+from database.repositories import DashboardRepository, SportsRepository
 from datahub.hub import DataHub
 from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Team
 from datahub.providers.mock import MockProvider
@@ -612,6 +612,8 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert response.status_code == 200
     assert "dashboard-root" in response.text
     assert "/dashboard/static/app.js" in response.text
+    assert "recommendations-scroll" in response.text
+    assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
     assert "今日推荐归档" in response.text
@@ -620,6 +622,21 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "盘口表现" in response.text
     assert "模型优化建议" in response.text
 
+
+
+
+def test_dashboard_latest_predictions_include_kickoff(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    with Session() as session:
+        items = DashboardRepository(session).latest_predictions()
+
+    assert items
+    assert datetime.fromisoformat(items[0]["kickoff"]) == result.fixture.start_time.replace(tzinfo=None)
 
 def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     app.dependency_overrides[dashboard_get_datahub] = lambda: DataHub(MockProvider(mock_settings))

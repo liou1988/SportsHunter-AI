@@ -231,6 +231,25 @@ table {
   table-layout: fixed;
 }
 
+.recommendations-table {
+  min-width: 980px;
+}
+
+.recommendations-scroll {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.recommendations-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.time-cell strong {
+  white-space: nowrap;
+}
+
 th,
 td {
   padding: 11px 12px;

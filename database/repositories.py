@@ -364,6 +364,7 @@ class DashboardRepository:
                     "match": f"{fixture.home_team.name} 对阵 {fixture.away_team.name}",
                     "fixture": f"{fixture.home_team.name} vs {fixture.away_team.name}",
                     "league": fixture.league.name,
+                    "kickoff": fixture.start_time.isoformat(),
                     "signal": prediction.signal,
                     "hunter_score": prediction.hunter_score,
                     "confidence": prediction.confidence,
