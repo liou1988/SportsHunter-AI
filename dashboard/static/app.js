@@ -20,7 +20,7 @@ async function refreshDashboard() {
     const payload = await fetchJson("/api/dashboard/summary");
     renderSummary(payload);
   } catch (error) {
-    $("last-updated").textContent = `刷新失败：${error.message}`;
+    setFooter(`刷新失败：${error.message}`);
   } finally {
     state.loading = false;
     setBusy(false);
@@ -28,24 +28,24 @@ async function refreshDashboard() {
 }
 
 async function runEvaluation() {
-  setFooter("正在生成日报...");
+  setFooter("正在生成复盘报告...");
   try {
     const payload = await fetchJson("/api/dashboard/evaluation/run", { method: "POST" });
-    $("daily-report").textContent = payload.report.markdown || "暂无日报";
+    $("daily-report").textContent = payload.report.markdown || "暂无复盘报告";
     await refreshDashboard();
   } catch (error) {
-    setFooter(`生成日报失败：${error.message}`);
+    setFooter(`生成复盘失败：${error.message}`);
   }
 }
 
 async function checkTelegramAlerts() {
-  setFooter("正在检查 Telegram 推送...");
+  setFooter("正在检查 Telegram 推荐推送...");
   try {
     const payload = await fetchJson("/api/telegram/alerts/check", { method: "POST" });
-    setFooter(`Telegram 检查完成：评估 ${payload.evaluated_count || 0} 场，推送 ${payload.pushed_count || 0} 场`);
+    setFooter(`推送检查完成：评估 ${payload.evaluated_count || 0} 场，新增推送 ${payload.pushed_count || 0} 场`);
     await refreshDashboard();
   } catch (error) {
-    setFooter(`Telegram 检查失败：${error.message}`);
+    setFooter(`推送检查失败：${error.message}`);
   }
 }
 
@@ -55,11 +55,11 @@ async function checkDataQuality() {
   try {
     const payload = await fetchJson("/api/dashboard/data-quality/check", { method: "POST" });
     renderDataQuality(payload);
-    setFooter(`数据质量检查完成：今日 ${payload.fixtures_count || 0} 场，赔率样本 ${payload.odds_sample_size || 0} 场`);
+    setFooter(`数据源检查完成：今日 ${payload.fixtures_count || 0} 场，盘口样本 ${payload.odds_sample_size || 0} 场`);
   } catch (error) {
-    $("data-quality-health").textContent = "失败";
+    $("data-quality-health").textContent = "检查失败";
     $("data-quality-health").className = "bad";
-    setFooter(`数据质量检查失败：${error.message}`);
+    setFooter(`数据源检查失败：${error.message}`);
   } finally {
     $("data-quality-button").disabled = false;
   }
@@ -72,72 +72,73 @@ function renderSummary(payload) {
   const reports = payload.reports || {};
   const counts = database.counts || {};
 
-  $("provider-health").textContent = provider.health || "--";
-  $("provider-health").className = provider.health === "ok" ? "good" : "bad";
+  $("provider-health").textContent = translateHealth(provider.health);
+  $("provider-health").className = statusClass(provider.health);
   $("recommendation-count").textContent = recommendations.count ?? "--";
+  $("fixture-count").textContent = counts.fixtures ?? "--";
   $("prediction-count").textContent = counts.predictions ?? "--";
+  $("result-count").textContent = counts.match_results ?? "--";
   $("learning-count").textContent = counts.learning_records ?? "--";
 
-  renderDetails("provider-details", {
-    provider: provider.provider,
-    health: provider.health,
-    latency: provider.latency,
-    last_update: provider.last_update,
-    error: provider.error || "-",
-  });
+  renderDetails("provider-details", [
+    ["数据源", translateProvider(provider.provider)],
+    ["状态", translateHealth(provider.health)],
+    ["延迟", formatSeconds(provider.latency)],
+    ["最后更新", formatTime(provider.last_update)],
+    ["异常", provider.error || "无"],
+  ]);
 
-  renderDetails("database-details", {
-    health: database.health,
-    fixtures: counts.fixtures,
-    predictions: counts.predictions,
-    match_results: counts.match_results,
-    odds_snapshots: counts.odds_snapshots,
-    learning_records: counts.learning_records,
-  });
+  renderDetails("database-details", [
+    ["状态", translateHealth(database.health)],
+    ["比赛", counts.fixtures],
+    ["预测", counts.predictions],
+    ["赛果", counts.match_results],
+    ["赔率快照", counts.odds_snapshots],
+    ["学习记录", counts.learning_records],
+    ["异常", database.error || "无"],
+  ]);
 
   renderRecommendations(recommendations.items || []);
   renderLatestPredictions(database.latest_predictions || []);
 
   const daily = reports.daily_report || {};
-  $("daily-report").textContent = daily.content || "暂无已生成日报。";
+  $("daily-report").textContent = daily.content || "暂无已生成复盘报告。";
   setFooter(`最后刷新：${formatTime(payload.generated_at)}`);
 }
 
 function renderDataQuality(payload) {
   const health = payload.health || "unknown";
   $("data-quality-health").textContent = translateHealth(health);
-  $("data-quality-health").className = health === "ok" ? "good" : (health === "warning" ? "warn" : "bad");
+  $("data-quality-health").className = statusClass(health);
 
-  renderDetails("data-quality-details", {
-    provider: payload.provider,
-    source: payload.source,
-    today: payload.today,
-    fixtures_count: payload.fixtures_count,
-    leagues_count: payload.leagues_count,
-    odds_sample_size: payload.odds_sample_size,
-    fixtures_with_odds: payload.fixtures_with_odds,
-    latency: payload.latency,
-    sources_checked: payload.sources_checked,
-    leagues_checked: payload.leagues_checked,
-    leagues_skipped: payload.leagues_skipped,
-    errors: (payload.errors || []).length,
-  });
+  renderDetails("data-quality-details", [
+    ["数据源", translateProvider(payload.provider)],
+    ["来源", formatSourceList(payload.sources_checked || payload.source)],
+    ["检查日期", formatDateKey(payload.today)],
+    ["今日比赛", payload.fixtures_count],
+    ["覆盖联赛", payload.leagues_count],
+    ["盘口样本", payload.odds_sample_size],
+    ["有盘口比赛", payload.fixtures_with_odds],
+    ["检查耗时", formatSeconds(payload.latency)],
+    ["跳过联赛", formatCount(payload.leagues_skipped)],
+    ["异常数量", (payload.errors || []).length],
+  ]);
   renderCoverage(payload.odds_coverage || {});
   renderQualityFixtures(payload.sample_fixtures || [], payload.errors || []);
 }
 
 function renderCoverage(coverage) {
   const root = $("data-quality-coverage");
-  const labels = {
-    european: "欧赔",
-    totals: "大小球",
-    asian_handicap: "亚盘",
-  };
-  root.innerHTML = Object.entries(labels).map(([key, label]) => {
+  const labels = [
+    ["european", "欧赔"],
+    ["asian_handicap", "亚盘"],
+    ["totals", "大小球"],
+  ];
+  root.innerHTML = labels.map(([key, label]) => {
     const item = coverage[key] || {};
     return `
       <div class="coverage-item">
-        <span>${label}</span>
+        <span>${label}覆盖率</span>
         <strong>${formatPercent(item.ratio)}</strong>
         <small>${formatNumber(item.fixtures)} 场</small>
       </div>
@@ -151,17 +152,18 @@ function renderQualityFixtures(fixtures, errors) {
     <div class="list-row">
       <div>
         <strong>${escapeHtml(item.match || "-")}</strong>
-        <span>${escapeHtml(item.league || "-")}</span>
+        <span>${escapeHtml(item.league || "-")} · ${escapeHtml(item.status_label || translateFixtureStatus(item.status))}</span>
       </div>
-      <div>
-        <span>${escapeHtml((item.odds_markets || []).join(", ") || "无盘口")}</span>
+      <div class="list-meta">
+        <span>${escapeHtml(formatMarketList(item.odds_markets || []))}</span>
+        <small>${formatTime(item.kickoff)}</small>
       </div>
     </div>
   `);
   const errorRows = errors.slice(0, 4).map((item) => `
     <div class="list-row error-row">
       <div>
-        <strong>${escapeHtml(item.stage || "error")}</strong>
+        <strong>${escapeHtml(translateStage(item.stage || "异常"))}</strong>
         <span>${escapeHtml(item.error || item)}</span>
       </div>
     </div>
@@ -176,7 +178,7 @@ function renderQualityFixtures(fixtures, errors) {
 function renderRecommendations(items) {
   const body = $("recommendations-body");
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="6">暂无已归档推荐，点击“检查推送”后会自动写入</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">暂无归档推荐，点击“检查推送”后会自动写入。</td></tr>`;
     return;
   }
   body.innerHTML = items.map((item) => {
@@ -185,12 +187,27 @@ function renderRecommendations(items) {
     const handicap = item.handicap || {};
     return `
       <tr>
-        <td>${escapeHtml(item.match || "-")}<br><small>${escapeHtml(item.league || "-")}</small></td>
-        <td><span class="badge">${escapeHtml(item.signal || "-")}</span><br><small>${escapeHtml(item.stake || "-")}</small></td>
-        <td>${formatNumber(item.hunter_score)}<br><small>${formatNumber(item.confidence)}</small></td>
+        <td>
+          <strong>${escapeHtml(item.match || "-")}</strong>
+          <small>${escapeHtml(item.league || "-")}</small>
+        </td>
+        <td>
+          <span class="badge">${escapeHtml(item.signal_label || translateSignal(item.signal))}</span>
+          <small>仓位 ${escapeHtml(formatStake(item.stake))}</small>
+        </td>
+        <td>
+          <strong>${formatNumber(item.hunter_score)}</strong>
+          <small>信心 ${formatNumber(item.confidence)}</small>
+        </td>
         <td>${escapeHtml(score.text || "-")}</td>
-        <td>${escapeHtml(total.label || "-")}<br><small>${formatNumber(total.edge)}</small></td>
-        <td>${escapeHtml(handicap.label || "-")}<br><small>${formatNumber(handicap.edge)}</small></td>
+        <td>
+          ${escapeHtml(total.label || "-")}
+          <small>${formatEdge(total.edge)}</small>
+        </td>
+        <td>
+          ${escapeHtml(handicap.label || "-")}
+          <small>${formatEdge(handicap.edge)}</small>
+        </td>
       </tr>
     `;
   }).join("");
@@ -206,21 +223,21 @@ function renderLatestPredictions(items) {
     <div class="list-row">
       <div>
         <strong>${escapeHtml(item.fixture || "-")}</strong>
-        <span>${escapeHtml(item.league || "-")}</span>
+        <span>${escapeHtml(item.league || "-")} · ${formatTime(item.created_at)}</span>
       </div>
-      <div>
-        <span class="badge">${escapeHtml(item.signal || "-")}</span>
-        <span>${formatNumber(item.hunter_score)}</span>
+      <div class="list-meta">
+        <span class="badge">${escapeHtml(item.signal_label || translateSignal(item.signal))}</span>
+        <small>Hunter ${formatNumber(item.hunter_score)}</small>
       </div>
     </div>
   `).join("");
 }
 
-function renderDetails(id, values) {
+function renderDetails(id, rows) {
   const root = $(id);
-  root.innerHTML = Object.entries(values).map(([key, value]) => `
+  root.innerHTML = rows.map(([label, value]) => `
     <div>
-      <dt>${escapeHtml(key)}</dt>
+      <dt>${escapeHtml(label)}</dt>
       <dd>${escapeHtml(formatDetailValue(value))}</dd>
     </div>
   `).join("");
@@ -232,6 +249,111 @@ function setBusy(isBusy) {
 
 function setFooter(text) {
   $("last-updated").textContent = text;
+}
+
+function statusClass(value) {
+  if (value === "ok" || value === true) return "good";
+  if (value === "warning" || value === "unknown" || value === "not_ready") return "warn";
+  return "bad";
+}
+
+function translateHealth(value) {
+  const map = {
+    ok: "正常",
+    true: "正常",
+    warning: "注意",
+    down: "异常",
+    false: "异常",
+    unknown: "未知",
+    not_ready: "未就绪",
+  };
+  return map[String(value)] || value || "--";
+}
+
+function translateProvider(value) {
+  const map = {
+    free: "免费真实数据源",
+    mock: "开发模拟数据源",
+    api: "商业 API 数据源",
+  };
+  return map[String(value)] || value || "--";
+}
+
+function translateSignal(value) {
+  const map = {
+    STRONG_BUY: "强烈推荐",
+    BUY: "推荐",
+    WATCH: "观察",
+    PASS: "跳过",
+    BLOCK: "风控拦截",
+  };
+  return map[String(value)] || value || "-";
+}
+
+function translateFixtureStatus(value) {
+  const map = {
+    scheduled: "未开赛",
+    live: "进行中",
+    finished: "已结束",
+    postponed: "已延期",
+    cancelled: "已取消",
+    unknown: "未知",
+  };
+  return map[String(value)] || value || "-";
+}
+
+function translateMarket(value) {
+  const map = {
+    european: "欧赔",
+    asian_handicap: "亚盘",
+    totals: "大小球",
+  };
+  return map[String(value)] || value;
+}
+
+function translateStage(value) {
+  const map = {
+    fixtures: "赛程采集",
+    odds: "赔率采集",
+    provider_debug: "数据源调试",
+  };
+  return map[String(value)] || value;
+}
+
+function formatSourceList(value) {
+  const map = {
+    espn: "ESPN",
+    thesportsdb: "TheSportsDB",
+    free: "免费数据源",
+    mock: "模拟源",
+  };
+  const values = Array.isArray(value) ? value : String(value || "").split(",");
+  return values.filter(Boolean).map((item) => map[String(item)] || item).join("、") || "-";
+}
+
+function formatMarketList(markets) {
+  if (!markets.length) return "暂无盘口";
+  return markets.map(translateMarket).join("、");
+}
+
+function formatDateKey(value) {
+  const text = String(value || "");
+  if (/^\d{8}$/.test(text)) {
+    return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  }
+  return value || "-";
+}
+
+function formatCount(value) {
+  if (Array.isArray(value)) return `${value.length} 个`;
+  return value ?? "-";
+}
+
+function formatSeconds(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (Number.isNaN(number)) return String(value);
+  return `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")} 秒`;
 }
 
 function formatTime(value) {
@@ -254,22 +376,23 @@ function formatPercent(value) {
   return `${(number * 100).toFixed(0)}%`;
 }
 
-function formatDetailValue(value) {
+function formatStake(value) {
   if (value === null || value === undefined || value === "") return "-";
-  if (Array.isArray(value)) return value.length ? value.join(", ") : "-";
-  if (typeof value === "object") return JSON.stringify(value);
-  return value;
+  const number = Number(value);
+  if (Number.isNaN(number)) return String(value);
+  return Number.isInteger(number) ? `${number}U` : `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}U`;
 }
 
-function translateHealth(value) {
-  const map = {
-    ok: "正常",
-    warning: "警告",
-    down: "异常",
-    unknown: "未知",
-    not_ready: "未就绪",
-  };
-  return map[value] || value || "--";
+function formatEdge(value) {
+  if (value === null || value === undefined || value === "") return "";
+  return `差值 ${formatNumber(value)}`;
+}
+
+function formatDetailValue(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (Array.isArray(value)) return value.length ? value.join("、") : "-";
+  if (typeof value === "object") return JSON.stringify(value);
+  return value;
 }
 
 function escapeHtml(value) {

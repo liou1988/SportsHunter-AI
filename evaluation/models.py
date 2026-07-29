@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -28,30 +29,30 @@ class EvaluationReport:
 
     def to_markdown(self) -> str:
         lines = [
-            f"# SportsHunter-AI {self.period.title()} Evaluation",
+            f"# SportsHunter-AI {_period_label(self.period)}复盘",
             "",
-            f"- Date: {self.report_date.isoformat()}",
-            f"- Settled predictions: {self.settled_count}",
-            f"- Learning records created: {self.learning_records_created}",
-            f"- Hunter Score hit rate: {self.metrics.hunter_hit_rate:.2%}",
-            f"- Signal hit rate: {self.metrics.signal_hit_rate:.2%}",
-            f"- Risk effectiveness: {self.metrics.risk_effectiveness:.2%}",
-            f"- Confidence calibration error: {self.metrics.confidence_calibration_error:.4f}",
+            f"- 日期：{self.report_date.isoformat()}",
+            f"- 已结算预测：{self.settled_count}",
+            f"- 新增学习记录：{self.learning_records_created}",
+            f"- Hunter 评分命中率：{self.metrics.hunter_hit_rate:.2%}",
+            f"- 信号命中率：{self.metrics.signal_hit_rate:.2%}",
+            f"- 风险控制有效性：{self.metrics.risk_effectiveness:.2%}",
+            f"- 信心校准误差：{self.metrics.confidence_calibration_error:.4f}",
             f"- ROI: {self.metrics.roi:.2%}",
             "",
-            "## League Performance",
-            *_format_rate_items(self.metrics.by_league),
+            "## 联赛表现",
+            *_format_rate_items(self.metrics.by_league, value_map=_translate_metric_name),
             "",
-            "## Market Performance",
-            *_format_rate_items(self.metrics.by_market),
+            "## 盘口表现",
+            *_format_rate_items(self.metrics.by_market, value_map=_translate_metric_name),
             "",
-            "## Why Wins",
+            "## 命中原因",
             *_format_list_items(self.wins),
             "",
-            "## Why Losses",
+            "## 未命中原因",
             *_format_list_items(self.losses),
             "",
-            "## Analysis",
+            "## 调整建议",
             *_format_list_items(self.module_notes),
         ]
         return "\n".join(lines)
@@ -73,13 +74,30 @@ class SettlementSummary:
         }
 
 
-def _format_rate_items(items: dict[str, float]) -> list[str]:
+def _format_rate_items(items: dict[str, float], value_map: Callable[[str], str] | None = None) -> list[str]:
     if not items:
-        return ["- No settled data."]
-    return [f"- {name}: {rate:.2%}" for name, rate in sorted(items.items())]
+        return ["- 暂无已结算数据。"]
+    mapper = value_map or (lambda value: value)
+    return [f"- {mapper(name)}：{rate:.2%}" for name, rate in sorted(items.items())]
 
 
 def _format_list_items(items: list[str]) -> list[str]:
     if not items:
-        return ["- No data."]
+        return ["- 暂无数据。"]
     return [f"- {item}" for item in items]
+
+
+def _period_label(period: str) -> str:
+    return {
+        "daily": "每日",
+        "weekly": "每周",
+        "monthly": "每月",
+    }.get(str(period), str(period))
+
+
+def _translate_metric_name(name: str) -> str:
+    return {
+        "moneyline": "胜平负",
+        "totals": "大小球",
+        "handicap": "让球",
+    }.get(str(name), str(name))

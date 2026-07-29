@@ -309,8 +309,9 @@ def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path
     assert report.metrics.by_market["handicap"] == 1.0
     assert report.wins
     assert report.losses == ["本周期暂无未命中推荐。"]
-    assert "## Why Wins" in report.to_markdown()
-    assert "## Why Losses" in report.to_markdown()
+    assert "# SportsHunter-AI 每日复盘" in report.to_markdown()
+    assert "## 命中原因" in report.to_markdown()
+    assert "## 未命中原因" in report.to_markdown()
     assert (tmp_path / "daily_report.md").exists()
 
 
@@ -366,7 +367,9 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert response.status_code == 200
     assert "dashboard-root" in response.text
     assert "/dashboard/static/app.js" in response.text
-    assert "预测运行、推荐归档和自动复盘控制台" in response.text
+    assert "体育预测运行看板" in response.text
+    assert "检查数据源" in response.text
+    assert "今日推荐归档" in response.text
 
 
 def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
@@ -400,6 +403,7 @@ def test_dashboard_data_quality_check_reports_odds_coverage(mock_settings) -> No
     assert payload["odds_market_counts"] == {"european": 1, "asian_handicap": 1, "totals": 1}
     assert payload["odds_coverage"]["european"]["ratio"] == 1.0
     assert payload["sample_fixtures"][0]["odds_markets"] == ["asian_handicap", "european", "totals"]
+    assert payload["sample_fixtures"][0]["status_label"] == "未开赛"
     assert payload["errors"] == []
 
 

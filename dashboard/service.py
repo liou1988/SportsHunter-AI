@@ -14,6 +14,12 @@ from datahub.hub import DataHub
 from datahub.models import Fixture, Odds, OddsMarket, to_plain_dict
 from evaluation.runner import EvaluationRunner
 from pipeline.runner import PredictionPipeline
+from telegram_bot.localization import (
+    translate_fixture_status,
+    translate_league_name,
+    translate_match_text,
+    translate_signal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +143,7 @@ def _provider_status(datahub: DataHub) -> dict[str, Any]:
                 "health": "unknown",
                 "last_update": None,
                 "latency": None,
-                "error": "尚未执行 Provider Health Check",
+                "error": "尚未执行数据源健康检查",
             }
         return {
             "provider": health.provider,
@@ -155,6 +161,7 @@ def _database_status() -> dict[str, Any]:
     try:
         with SessionLocal() as session:
             summary = DashboardRepository(session).summary()
+        summary["latest_predictions"] = [_localize_prediction_item(item) for item in summary.get("latest_predictions", [])]
         return {"health": "ok", "error": None, **summary}
     except Exception as exc:  # noqa: BLE001 - fresh deployments may not have migrated yet
         logger.warning("dashboard database summary unavailable: %s", exc)
@@ -186,7 +193,7 @@ def _archived_recommendation_status(database: dict[str, Any]) -> dict[str, Any]:
         "health": "ok" if database.get("health") == "ok" else "unknown",
         "error": database.get("error"),
         "count": len(items),
-        "items": items[:8],
+        "items": [_localize_prediction_item(item) for item in items[:8]],
         "source": "predictions_archive",
     }
 
@@ -246,10 +253,11 @@ def _fixture_odds(datahub: DataHub, fixture: Fixture, errors: list[dict[str, Any
 def _quality_fixture_payload(fixture: Fixture, markets: list[str]) -> dict[str, Any]:
     return {
         "fixture_id": fixture.id,
-        "league": fixture.league.name,
-        "match": f"{fixture.home_team.name} vs {fixture.away_team.name}",
+        "league": translate_league_name(fixture.league.name),
+        "match": translate_match_text(f"{fixture.home_team.name} vs {fixture.away_team.name}"),
         "kickoff": fixture.start_time.isoformat(),
         "status": fixture.status.value,
+        "status_label": translate_fixture_status(fixture.status.value),
         "provider": fixture.provider,
         "odds_markets": markets,
     }
@@ -260,3 +268,16 @@ def _fixtures_per_league(fixtures: list[Fixture]) -> dict[str, int]:
     for fixture in fixtures:
         counts[fixture.league.id] = counts.get(fixture.league.id, 0) + 1
     return counts
+
+
+def _localize_prediction_item(item: dict[str, Any]) -> dict[str, Any]:
+    localized = dict(item)
+    if localized.get("match"):
+        localized["match"] = translate_match_text(str(localized["match"]))
+    if localized.get("fixture"):
+        localized["fixture"] = translate_match_text(str(localized["fixture"]))
+    if localized.get("league"):
+        localized["league"] = translate_league_name(str(localized["league"]))
+    if localized.get("signal"):
+        localized["signal_label"] = translate_signal(str(localized["signal"]))
+    return localized
