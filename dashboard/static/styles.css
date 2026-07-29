@@ -681,3 +681,164 @@ footer {
     text-align: left;
   }
 }
+
+
+.review-report {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #fbfcfd;
+}
+
+.review-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.review-metric {
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid #e1e7ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.review-metric span,
+.review-rate-row span {
+  display: block;
+  color: #64727f;
+  font-size: 12px;
+}
+
+.review-metric strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 20px;
+  line-height: 1.15;
+}
+
+.review-two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.review-section {
+  min-width: 0;
+  border: 1px solid #e1e7ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.review-section h3 {
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf1f5;
+  color: #23313f;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.review-section ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px 14px 28px;
+}
+
+.review-section li {
+  color: #23313f;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.review-match-row {
+  list-style: none;
+  margin-left: -14px;
+  padding: 10px;
+  border: 1px solid #edf1f5;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.review-match-row strong,
+.review-match-row p {
+  display: block;
+}
+
+.review-match-row p {
+  margin-top: 7px;
+  color: #64727f;
+  font-size: 13px;
+}
+
+.review-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.review-tags span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #eef2f5;
+  color: #40505f;
+  font-size: 12px;
+}
+
+.review-rate-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.review-rate-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(140px, 2fr) 64px;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-rate-row strong {
+  text-align: right;
+  font-size: 13px;
+}
+
+.review-advice {
+  border-color: #d8e8e4;
+  background: #f7fbfa;
+}
+
+.review-raw {
+  border: 1px solid #e1e7ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.review-raw summary {
+  padding: 10px 12px;
+  cursor: pointer;
+  color: #2b6f6a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@media (max-width: 1180px) {
+  .review-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-two-column {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .review-summary-grid,
+  .review-rate-row {
+    grid-template-columns: 1fr;
+  }
+}

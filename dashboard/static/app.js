@@ -29,13 +29,13 @@ async function refreshDashboard() {
 }
 
 async function runEvaluation() {
-  setFooter("正在生成复盘报告...");
+  setFooter("\u6b63\u5728\u751f\u6210\u590d\u76d8\u62a5\u544a...");
   try {
     const payload = await fetchJson("/api/dashboard/evaluation/run", { method: "POST" });
-    $("daily-report").textContent = payload.report.markdown || "暂无复盘报告";
+    renderEvaluationReport(payload.report || {});
     await refreshDashboard();
   } catch (error) {
-    setFooter(`生成复盘失败：${error.message}`);
+    setFooter(`\u751f\u6210\u590d\u76d8\u5931\u8d25\uff1a${error.message}`);
   }
 }
 
@@ -125,8 +125,191 @@ function renderSummary(payload) {
   renderOptimizer(optimizer);
 
   const daily = reports.daily_report || {};
-  $("daily-report").textContent = daily.content || "暂无已生成复盘报告。";
+  renderEvaluationReportFromMarkdown(daily.content || "");
   setFooter(`最后刷新：${formatTime(payload.generated_at)}`);
+}
+
+
+
+function renderEvaluationReportFromMarkdown(markdown) {
+  if (!String(markdown || "").trim()) {
+    renderEvaluationReport({});
+    return;
+  }
+  renderEvaluationReport(parseEvaluationMarkdown(markdown));
+}
+
+function renderEvaluationReport(report) {
+  const root = $("daily-report");
+  const hasReport = report && (
+    report.markdown ||
+    report.settled_count !== undefined ||
+    (report.overview || []).length ||
+    (report.wins || []).length ||
+    (report.losses || []).length
+  );
+  if (!hasReport) {
+    root.innerHTML = `<p class="muted">\u6682\u65e0\u590d\u76d8\u62a5\u544a\u3002\u70b9\u51fb\u201c\u751f\u6210\u590d\u76d8\u201d\u540e\u4f1a\u663e\u793a\u5df2\u7ed3\u7b97\u6bd4\u8d5b\u7684\u7ed3\u6784\u5316\u5206\u6790\u3002</p>`;
+    return;
+  }
+
+  const metrics = report.metrics || {};
+  root.innerHTML = `
+    <div class="review-summary-grid">
+      ${renderReviewMetric("\u590d\u76d8\u65e5\u671f", report.date || report.report_date || "-")}
+      ${renderReviewMetric("\u5df2\u7ed3\u7b97", `${formatNumber(report.settled_count)} \u573a`)}
+      ${renderReviewMetric("\u5b66\u4e60\u8bb0\u5f55", `${formatNumber(report.learning_records_created)} \u6761`)}
+      ${renderReviewMetric("ROI", formatPercent(metrics.roi), metricClass(metrics.roi, 0, true))}
+      ${renderReviewMetric("Hunter\u547d\u4e2d", formatPercent(metrics.hunter_hit_rate), metricClass(metrics.hunter_hit_rate, 0.6))}
+      ${renderReviewMetric("\u4fe1\u53f7\u547d\u4e2d", formatPercent(metrics.signal_hit_rate), metricClass(metrics.signal_hit_rate, 0.6))}
+      ${renderReviewMetric("\u98ce\u63a7\u6709\u6548", formatPercent(metrics.risk_effectiveness), metricClass(metrics.risk_effectiveness, 0.5))}
+      ${renderReviewMetric("\u4fe1\u5fc3\u8bef\u5dee", formatNumber(metrics.confidence_calibration_error), metricClass(metrics.confidence_calibration_error, 0.18, false, true))}
+    </div>
+    ${renderReviewSection("\u6838\u5fc3\u7ed3\u8bba", report.overview, "review-section-wide")}
+    <div class="review-two-column">
+      ${renderReviewSection("\u547d\u4e2d\u539f\u56e0", report.wins, "", true)}
+      ${renderReviewSection("\u672a\u547d\u4e2d\u539f\u56e0", report.losses, "", true)}
+    </div>
+    <div class="review-two-column">
+      ${renderReviewSection("\u4fe1\u5fc3\u6821\u51c6", report.confidence_notes)}
+      ${renderReviewSection("\u98ce\u9669\u5206\u5c42", report.risk_notes)}
+    </div>
+    ${renderReviewRateSection("\u8054\u8d5b\u8868\u73b0", metrics.by_league || {})}
+    ${renderReviewRateSection("\u76d8\u53e3\u8868\u73b0", metrics.by_market || {})}
+    ${renderReviewSection("\u6a21\u5757\u8d21\u732e", report.module_contributions, "review-section-wide")}
+    ${renderReviewSection("\u8c03\u6574\u5efa\u8bae", report.module_notes, "review-section-wide review-advice")}
+    ${report.markdown ? `<details class="review-raw"><summary>\u67e5\u770b\u539f\u59cb\u62a5\u544a</summary><pre>${escapeHtml(report.markdown)}</pre></details>` : ""}
+  `;
+}
+
+function renderReviewMetric(label, value, className = "") {
+  return `
+    <div class="review-metric ${className}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value || "-")}</strong>
+    </div>
+  `;
+}
+
+function renderReviewSection(title, items, className = "", matchRows = false) {
+  const list = normalizeList(items);
+  const body = list.length
+    ? list.map((item) => matchRows ? renderReviewMatchRow(item) : `<li>${escapeHtml(item)}</li>`).join("")
+    : `<li class="muted">\u6682\u65e0\u6570\u636e\u3002</li>`;
+  return `
+    <section class="review-section ${className}">
+      <h3>${escapeHtml(title)}</h3>
+      <ul>${body}</ul>
+    </section>
+  `;
+}
+
+function renderReviewMatchRow(item) {
+  const parts = String(item).split("|").map((part) => part.trim()).filter(Boolean);
+  const title = parts.shift() || item;
+  const reason = parts.length ? parts.pop() : "";
+  return `
+    <li class="review-match-row">
+      <strong>${escapeHtml(title)}</strong>
+      ${parts.length ? `<div class="review-tags">${parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>` : ""}
+      ${reason ? `<p>${escapeHtml(reason)}</p>` : ""}
+    </li>
+  `;
+}
+
+function renderReviewRateSection(title, rates) {
+  const entries = Object.entries(rates || {});
+  const body = entries.length
+    ? entries.map(([name, value]) => {
+        const width = Math.max(3, Math.min(100, Number(value || 0) * 100));
+        return `
+          <div class="review-rate-row">
+            <span>${escapeHtml(name)}</span>
+            <div class="bar-track"><span style="width:${width}%"></span></div>
+            <strong>${formatPercent(value)}</strong>
+          </div>
+        `;
+      }).join("")
+    : `<p class="muted">\u6682\u65e0\u6570\u636e\u3002</p>`;
+  return `
+    <section class="review-section review-section-wide">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="review-rate-list">${body}</div>
+    </section>
+  `;
+}
+
+function parseEvaluationMarkdown(markdown) {
+  const report = {
+    markdown,
+    overview: [],
+    wins: [],
+    losses: [],
+    confidence_notes: [],
+    risk_notes: [],
+    module_contributions: [],
+    module_notes: [],
+    metrics: { by_league: {}, by_market: {} },
+  };
+  const sectionMap = {
+    "\u6838\u5fc3\u7ed3\u8bba": "overview",
+    "\u547d\u4e2d\u539f\u56e0": "wins",
+    "\u672a\u547d\u4e2d\u539f\u56e0": "losses",
+    "\u4fe1\u5fc3\u6821\u51c6": "confidence_notes",
+    "\u98ce\u9669\u5206\u5c42": "risk_notes",
+    "\u6a21\u5757\u8d21\u732e": "module_contributions",
+    "\u8c03\u6574\u5efa\u8bae": "module_notes",
+  };
+  let section = "";
+  String(markdown || "").split(/\r?\n/).forEach((line) => {
+    const text = line.trim();
+    if (!text) return;
+    if (text.startsWith("## ")) {
+      section = text.replace(/^##\s+/, "");
+      return;
+    }
+    if (!text.startsWith("- ")) return;
+    const item = text.slice(2).trim();
+    if (item.startsWith("\u65e5\u671f\uff1a")) report.date = item.replace("\u65e5\u671f\uff1a", "").trim();
+    else if (item.startsWith("\u5df2\u7ed3\u7b97\u9884\u6d4b\uff1a")) report.settled_count = parseLooseNumber(item);
+    else if (item.startsWith("\u65b0\u589e\u5b66\u4e60\u8bb0\u5f55\uff1a")) report.learning_records_created = parseLooseNumber(item);
+    else if (item.startsWith("Hunter \u8bc4\u5206\u547d\u4e2d\u7387\uff1a")) report.metrics.hunter_hit_rate = parseLoosePercent(item);
+    else if (item.startsWith("\u4fe1\u53f7\u547d\u4e2d\u7387\uff1a")) report.metrics.signal_hit_rate = parseLoosePercent(item);
+    else if (item.startsWith("\u98ce\u9669\u63a7\u5236\u6709\u6548\u6027\uff1a")) report.metrics.risk_effectiveness = parseLoosePercent(item);
+    else if (item.startsWith("\u4fe1\u5fc3\u6821\u51c6\u8bef\u5dee\uff1a")) report.metrics.confidence_calibration_error = parseLooseNumber(item);
+    else if (item.startsWith("ROI:")) report.metrics.roi = parseLoosePercent(item);
+    else if (section === "\u8054\u8d5b\u8868\u73b0") assignRate(report.metrics.by_league, item);
+    else if (section === "\u76d8\u53e3\u8868\u73b0") assignRate(report.metrics.by_market, item);
+    else if (sectionMap[section]) report[sectionMap[section]].push(item);
+  });
+  return report;
+}
+
+function assignRate(target, item) {
+  const [name, value] = String(item).split("\uff1a");
+  if (!name || value === undefined) return;
+  target[name.trim()] = parseLoosePercent(value);
+}
+
+function parseLooseNumber(value) {
+  const match = String(value).match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+
+function parseLoosePercent(value) {
+  const number = parseLooseNumber(value);
+  return number === null ? null : number / 100;
+}
+
+function normalizeList(items) {
+  return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
+function metricClass(value, threshold, higherIsBetter = true, lowerIsBetter = false) {
+  const number = Number(value);
+  if (Number.isNaN(number)) return "";
+  if (lowerIsBetter) return number <= threshold ? "good" : "warn";
+  return (higherIsBetter ? number >= threshold : number > threshold) ? "good" : "warn";
 }
 
 function renderOptimizer(payload) {
