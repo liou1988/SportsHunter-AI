@@ -1,6 +1,7 @@
 const state = {
   loading: false,
   optimizer: null,
+  recommendationSort: "confidence",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -522,13 +523,7 @@ function renderRecommendations(items) {
     body.innerHTML = `<tr><td colspan="6">暂无归档推荐，点击“检查推送”后会自动写入。</td></tr>`;
     return;
   }
-  const sortedItems = [...items].sort((a, b) => {
-    const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
-    if (confidenceDiff !== 0) return confidenceDiff;
-    const scoreDiff = Number(b.hunter_score || 0) - Number(a.hunter_score || 0);
-    if (scoreDiff !== 0) return scoreDiff;
-    return String(b.created_at || "").localeCompare(String(a.created_at || ""));
-  });
+  const sortedItems = sortRecommendations(items);
   body.innerHTML = sortedItems.map((item) => {
     const score = item.score_prediction || {};
     const total = item.total_goals || {};
@@ -559,6 +554,44 @@ function renderRecommendations(items) {
       </tr>
     `;
   }).join("");
+}
+
+function sortRecommendations(items) {
+  const signalPriority = { STRONG_BUY: 5, BUY: 4, WATCH: 3, PASS: 2, BLOCK: 1 };
+  return [...items].sort((a, b) => {
+    if (state.recommendationSort === "hunter") {
+      return compareNumbers(b.hunter_score, a.hunter_score)
+        || compareNumbers(b.confidence, a.confidence)
+        || compareDatesDesc(a.created_at, b.created_at);
+    }
+    if (state.recommendationSort === "kickoff") {
+      return compareDatesAsc(a.kickoff, b.kickoff)
+        || compareNumbers(b.confidence, a.confidence)
+        || compareNumbers(b.hunter_score, a.hunter_score);
+    }
+    if (state.recommendationSort === "signal") {
+      return compareNumbers(signalPriority[b.signal] || 0, signalPriority[a.signal] || 0)
+        || compareNumbers(b.confidence, a.confidence)
+        || compareNumbers(b.hunter_score, a.hunter_score);
+    }
+    return compareNumbers(b.confidence, a.confidence)
+      || compareNumbers(b.hunter_score, a.hunter_score)
+      || compareDatesDesc(a.created_at, b.created_at);
+  });
+}
+
+function compareNumbers(left, right) {
+  const leftNumber = Number(left || 0);
+  const rightNumber = Number(right || 0);
+  return leftNumber - rightNumber;
+}
+
+function compareDatesAsc(left, right) {
+  return Date.parse(left || 0) - Date.parse(right || 0);
+}
+
+function compareDatesDesc(left, right) {
+  return Date.parse(right || 0) - Date.parse(left || 0);
 }
 
 function renderLatestPredictions(items) {
@@ -772,4 +805,8 @@ $("data-quality-button").addEventListener("click", checkDataQuality);
 $("evaluation-button").addEventListener("click", runEvaluation);
 $("telegram-button").addEventListener("click", checkTelegramAlerts);
 $("apply-optimizer-button").addEventListener("click", applyOptimizerSuggestions);
+$("recommendation-sort").addEventListener("change", (event) => {
+  state.recommendationSort = event.target.value || "confidence";
+  refreshDashboard();
+});
 refreshDashboard();
