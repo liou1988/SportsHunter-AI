@@ -170,7 +170,10 @@ class ModelOptimizer:
 
         for row in losses:
             module = str(row.get("primary_error_module") or "unknown")
-            for target, impact in ERROR_IMPACTS.get(module, {}).items():
+            impacts = ERROR_IMPACTS.get(module)
+            if impacts is None and module in RATING_WEIGHTS:
+                impacts = {module: -0.4}
+            for target, impact in (impacts or {}).items():
                 deltas[target] += impact
 
         for module, value in list(deltas.items()):
@@ -232,6 +235,8 @@ def _loss_module_counts(rows: list[dict]) -> dict[str, int]:
 
 def _module_evidence(module: str, loss_counts: dict[str, int]) -> str:
     related = []
+    if loss_counts.get(module):
+        related.append(f"{MODULE_LABELS.get(module, module)}偏差 {loss_counts[module]} 场")
     for error_module, impacts in ERROR_IMPACTS.items():
         if module in impacts and loss_counts.get(error_module):
             related.append(f"{_error_label(error_module)} {loss_counts[error_module]} 场")
