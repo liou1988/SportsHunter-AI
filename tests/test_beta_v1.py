@@ -46,6 +46,7 @@ from api.routers import telegram as telegram_router
 from dashboard.router import get_datahub as dashboard_get_datahub
 from scheduler import jobs
 from scheduler.runner import create_scheduler
+from telegram_bot import localization as localization_module
 from telegram_bot.alerts import AlertArchive, RecommendationAlertPusher, format_recommendation_alert_message
 from telegram_bot.fixtures import format_fixtures_message
 from telegram_bot.localization import translate_match_text, translate_team_name
@@ -789,7 +790,7 @@ def test_telegram_message_formats_recommendations() -> None:
             ],
         }
     )
-    assert "戈亚尼亚竞技 对阵 欧帕瑞欧PR" in message
+    assert "戈亚尼亚竞技 对阵 欧帕瑞欧" in message
     assert "联赛：巴西乙级联赛" in message
     assert "信号：推荐" in message
     assert "推荐方向：戈亚尼亚竞技" in message
@@ -919,7 +920,7 @@ def test_telegram_notifier_rejects_bot_chat_id() -> None:
 
 def test_telegram_localizes_current_fixture_team_names() -> None:
     assert translate_team_name("Atlético Goianiense") == "戈亚尼亚竞技"
-    assert translate_team_name("Operário PR") == "欧帕瑞欧PR"
+    assert translate_team_name("Operário PR") == "欧帕瑞欧"
     assert translate_team_name("CRB") == "雷加塔斯巴西"
     assert translate_team_name("Vila Nova") == "维拉诺瓦"
     assert translate_team_name("Sport") == "累西腓体育"
@@ -942,6 +943,37 @@ def test_telegram_localizes_expanded_fixture_team_names() -> None:
     assert translate_match_text("Stabæk vs Hødd") == "斯塔贝克 对阵 霍德"
 
 
+
+
+def test_localization_hot_dictionary_covers_expanded_provider_names() -> None:
+    assert translate_team_name("CSKA Sofia") == "\u7d22\u83f2\u4e9a\u4e2d\u592e\u9646\u519b"
+    assert translate_team_name("FK Qarabag") == "\u5361\u62c9\u5df4\u8d6b"
+    assert translate_team_name("Hibernian") == "\u5e0c\u4f2f\u5c3c\u5b89"
+    assert translate_match_text("FC Koper vs NSI Runavik") == "\u79d1\u4f69\u5c14 \u5bf9\u9635 \u9c81\u7eb3\u7ef4\u514b"
+
+
+def test_localization_auto_translation_uses_cache(monkeypatch, tmp_path) -> None:
+    cache_path = tmp_path / "translation_cache.json"
+    calls = []
+
+    def fake_remote_translate(value: str) -> str:
+        calls.append(value)
+        return "\u81ea\u52a8\u7ffb\u8bd1\u7403\u961f"
+
+    monkeypatch.setenv("AUTO_TRANSLATION_ENABLED", "true")
+    monkeypatch.setenv("TRANSLATION_CACHE_PATH", str(cache_path))
+    monkeypatch.setattr(localization_module, "_remote_translate_label", fake_remote_translate)
+    localization_module._reset_translation_cache_for_tests()
+
+    assert translate_team_name("Neverland United FC") == "\u81ea\u52a8\u7ffb\u8bd1\u7403\u961f"
+    assert translate_team_name("Neverland United FC") == "\u81ea\u52a8\u7ffb\u8bd1\u7403\u961f"
+    assert calls == ["Neverland United FC"]
+    assert cache_path.exists()
+
+    localization_module._reset_translation_cache_for_tests()
+    monkeypatch.setenv("AUTO_TRANSLATION_ENABLED", "false")
+
+
 def test_telegram_fixtures_message_formats_real_fixtures() -> None:
     league = League(id="bra.2", name="Brazilian Serie B", provider="free")
     fixture = Fixture(
@@ -959,7 +991,7 @@ def test_telegram_fixtures_message_formats_real_fixtures() -> None:
 
     assert "SportsHunter AI 今日真实赛程" in message
     assert "比赛数量：1" in message
-    assert "戈亚尼亚竞技 对阵 欧帕瑞欧PR" in message
+    assert "戈亚尼亚竞技 对阵 欧帕瑞欧" in message
     assert "巴西乙级联赛（bra.2）" in message
     assert "开赛时间：2026-07-28 06:30 北京时间" in message
 
@@ -1075,7 +1107,9 @@ def test_telegram_alert_message_formats_single_prediction() -> None:
     assert "仓位：1.5U" in message
     assert "比分预测：2-1" in message
     assert "大小球：大 2.5" in message
-    assert "让球：Debug Home -0.25" in message
+    assert "让球：" in message
+    assert "-0.25" in message
+    assert "Debug Home" not in message
     assert "赔率：DebugBook" in message
 
 

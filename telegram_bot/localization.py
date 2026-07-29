@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import json
+import logging
+import os
+from pathlib import Path
 import re
+from threading import Lock
 import unicodedata
+import zlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+
+logger = logging.getLogger(__name__)
+
+_LATIN_TEXT_PATTERN = re.compile(r"[A-Za-zÀ-ɏ]{2,}")
+_CJK_TEXT_PATTERN = re.compile(r"[\u4e00-\u9fff]")
+_TRANSLATION_CACHE_LOCK = Lock()
+_TRANSLATION_CACHE: dict[str, str] | None = None
+_TRANSLATION_CACHE_PATH: Path | None = None
 
 SIGNAL_LABELS = {
     "STRONG_BUY": "强烈推荐",
@@ -315,18 +329,30 @@ def translate_fixture_status(value: str) -> str:
 
 
 def translate_league(league_id: str, fallback_name: str | None = None) -> str:
-    return LEAGUE_LABELS.get(str(league_id), translate_league_name(fallback_name or str(league_id)))
+    label = LEAGUE_LABELS.get(str(league_id))
+    if label:
+        return _finalize_display_label(label, fallback_prefix="\u8d5b\u4e8b")
+    return translate_league_name(fallback_name or str(league_id))
 
 
 def translate_league_name(name: str) -> str:
-    return LEAGUE_LABELS_BY_NAME.get(str(name), str(name))
+    cleaned = str(name).strip()
+    mapped = _LEAGUE_NAME_LOOKUP.get(_normalize_name(cleaned))
+    if mapped:
+        return _finalize_display_label(mapped, fallback_prefix="\u8d5b\u4e8b")
+    translated = _auto_translate_label(cleaned, namespace="league")
+    return _finalize_display_label(translated, fallback_prefix="\u8d5b\u4e8b")
 
 
 def translate_team_name(name: str | None) -> str:
     if not name:
-        return "未知球队"
+        return "\u672a\u77e5\u7403\u961f"
     cleaned = str(name).strip()
-    return _TEAM_LOOKUP.get(_normalize_name(cleaned), cleaned)
+    mapped = _TEAM_LOOKUP.get(_normalize_name(cleaned))
+    if mapped:
+        return _finalize_team_label(mapped)
+    translated = _auto_translate_label(cleaned, namespace="team")
+    return _finalize_team_label(translated)
 
 
 def translate_match_text(match: str) -> str:
@@ -335,6 +361,106 @@ def translate_match_text(match: str) -> str:
     if len(parts) == 2:
         return f"{translate_team_name(parts[0])} 对阵 {translate_team_name(parts[1])}"
     return str(match)
+
+
+def _auto_translate_label(value: str, namespace: str) -> str:
+    cleaned = str(value).strip()
+    if not cleaned or not _looks_untranslated(cleaned) or not _auto_translation_enabled():
+        return cleaned
+    cache_key = f"{namespace}:{_normalize_name(cleaned)}"
+    cache = _load_translation_cache()
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+    translated = _remote_translate_label(cleaned)
+    if not translated:
+        return cleaned
+    translated = _clean_auto_translation(translated)
+    if not translated or translated == cleaned:
+        return cleaned
+    cache[cache_key] = translated
+    _save_translation_cache(cache)
+    return translated
+
+
+def _auto_translation_enabled() -> bool:
+    return os.getenv("AUTO_TRANSLATION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _looks_untranslated(value: str) -> bool:
+    return bool(_LATIN_TEXT_PATTERN.search(value))
+
+
+def _translation_cache_file() -> Path:
+    return Path(os.getenv("TRANSLATION_CACHE_PATH", "/app/data/translation_cache.json"))
+
+
+def _load_translation_cache() -> dict[str, str]:
+    global _TRANSLATION_CACHE, _TRANSLATION_CACHE_PATH
+    path = _translation_cache_file()
+    with _TRANSLATION_CACHE_LOCK:
+        if _TRANSLATION_CACHE is not None and _TRANSLATION_CACHE_PATH == path:
+            return _TRANSLATION_CACHE
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except Exception as exc:  # noqa: BLE001 - cache failures should not break rendering
+            logger.warning("failed to load translation cache", extra={"path": str(path)}, exc_info=exc)
+            payload = {}
+        _TRANSLATION_CACHE = {str(key): str(value) for key, value in payload.items() if value}
+        _TRANSLATION_CACHE_PATH = path
+        return _TRANSLATION_CACHE
+
+
+def _save_translation_cache(cache: dict[str, str]) -> None:
+    path = _translation_cache_file()
+    with _TRANSLATION_CACHE_LOCK:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - rendering should survive cache write failures
+            logger.warning("failed to save translation cache", extra={"path": str(path)}, exc_info=exc)
+
+
+def _remote_translate_label(value: str) -> str | None:
+    try:
+        from deep_translator import GoogleTranslator
+
+        return GoogleTranslator(source="auto", target="zh-CN").translate(value)
+    except Exception as exc:  # noqa: BLE001 - translation is best-effort
+        logger.warning("automatic translation failed", extra={"label": value}, exc_info=exc)
+        return None
+
+
+def _clean_auto_translation(value: str) -> str:
+    cleaned = re.sub(r"\s+", "", str(value).strip())
+    return cleaned.strip().strip("\'").strip('"').strip("`")
+
+
+def _finalize_display_label(value: str, *, fallback_prefix: str) -> str:
+    raw = str(value).strip()
+    if not raw:
+        return fallback_prefix
+    if not _looks_untranslated(raw):
+        return raw
+    if _CJK_TEXT_PATTERN.search(raw):
+        cleaned = re.sub(r"[A-Za-z\u00c0-\u024f]+", "", raw)
+        cleaned = re.sub(r"[\s\-_/().'`]+", "", cleaned).strip()
+        if cleaned:
+            return cleaned
+    code = zlib.crc32(raw.encode("utf-8")) % 10000
+    return f"{fallback_prefix}{code:04d}"
+
+
+def _finalize_team_label(value: str) -> str:
+    return _finalize_display_label(value, fallback_prefix="\u7403\u961f")
+
+
+def _reset_translation_cache_for_tests() -> None:
+    global _TRANSLATION_CACHE, _TRANSLATION_CACHE_PATH
+    with _TRANSLATION_CACHE_LOCK:
+        _TRANSLATION_CACHE = None
+        _TRANSLATION_CACHE_PATH = None
+
 
 
 def format_beijing_time(value: datetime | str) -> str:
@@ -481,7 +607,7 @@ TEAM_NAME_TRANSLATIONS.update({
     "Am\u00e9rica Cali": "\u5361\u5229\u7f8e\u6d32",
     "Atl\u00e9tico Junior": "\u5df4\u5170\u57fa\u4e9a\u9752\u5e74",
     "Atl. Junior": "\u5df4\u5170\u57fa\u4e9a\u9752\u5e74",
-    "Barranquilla FC": "\u5df4\u5170\u57fa\u4e9aFC",
+    "Barranquilla FC": "\u5df4\u5170\u57fa\u4e9a",
     "Barranquilla": "\u5df4\u5170\u57fa\u4e9a",
     "Inter Palmira": "\u5e15\u5c14\u7c73\u62c9\u56fd\u9645",
     "Internacional de Bogot\u00e1": "\u6ce2\u54e5\u5927\u56fd\u9645",
@@ -489,9 +615,9 @@ TEAM_NAME_TRANSLATIONS.update({
     "Chattanooga Red Wolves": "\u67e5\u5854\u52aa\u52a0\u7ea2\u72fc",
     "Utah Royals": "\u72b9\u4ed6\u7687\u5bb6\u5973\u8db3",
     "Washington Spirit": "\u534e\u76db\u987f\u7cbe\u795e\u5973\u8db3",
-    "Bay FC": "\u6d77\u6e7eFC",
+    "Bay FC": "\u6d77\u6e7e",
     "Bay": "\u6d77\u6e7e",
-    "Gotham FC": "\u54e5\u8c2dFC",
+    "Gotham FC": "\u54e5\u8c2d",
     "Gotham": "\u54e5\u8c2d",
     "Kansas City Current": "\u582a\u8428\u65af\u57ce\u6f6e\u6d41\u5973\u8db3",
     "Kansas City": "\u582a\u8428\u65af\u57ce",
@@ -535,4 +661,107 @@ TEAM_NAME_TRANSLATIONS.update({
     "Liga MX All Stars": "\u58a8\u897f\u54e5\u8054\u8d5b\u5168\u660e\u661f",
 })
 
+
+# Hot dictionary for expanded free-provider feeds. Automatic translation covers future names;
+# these aliases keep common football names stable and avoid awkward machine translations.
+LEAGUE_LABELS_BY_NAME.update({
+    "UEFA Europa League Qualifying": "\u6b27\u8db3\u8054\u6b27\u6d32\u8054\u8d5b\u8d44\u683c\u8d5b",
+    "Colombian Primera A": "\u54e5\u4f26\u6bd4\u4e9a\u7532\u7ea7\u8054\u8d5b",
+    "Liga de Expansion MX": "\u58a8\u897f\u54e5\u6269\u5c55\u8054\u8d5b",
+})
+TEAM_NAME_TRANSLATIONS.update({
+    "CSKA Sofia": "\u7d22\u83f2\u4e9a\u4e2d\u592e\u9646\u519b",
+    "FK Qarabag": "\u5361\u62c9\u5df4\u8d6b",
+    "Qarabag": "\u5361\u62c9\u5df4\u8d6b",
+    "Atl\u00e9tico Bucaramanga": "\u5e03\u5361\u62c9\u66fc\u52a0\u7ade\u6280",
+    "Llaneros FC": "\u4e9a\u8bfa\u65af",
+    "Alebrijes de Oaxaca": "\u74e6\u54c8\u5361\u963f\u83b1\u5e03\u91cc\u8d6b\u65af",
+    "Dorados de Sinaloa": "\u9521\u90a3\u7f57\u4e9a\u591a\u62c9\u591a\u65af",
+    "Bol\u00edvar": "\u73bb\u5229\u74e6\u5c14",
+    "Hibernian": "\u5e0c\u4f2f\u5c3c\u5b89",
+    "KF Malisheva": "\u9a6c\u5229\u820d\u74e6",
+    "Dinamo City": "\u5730\u62c9\u90a3\u8fea\u7eb3\u6469",
+    "Aluminij": "\u963f\u9c81\u7c73\u5c3c",
+    "Braga": "\u5e03\u62c9\u52a0",
+    "Zeleznicar Pancevo": "\u6f58\u5207\u6c83\u94c1\u8def\u5de5\u4eba",
+    "FC Koper": "\u79d1\u4f69\u5c14",
+    "NSI Runavik": "\u9c81\u7eb3\u7ef4\u514b",
+    "Coleraine": "\u79d1\u5c14\u96f7\u6069",
+    "HJK Helsinki": "\u8d6b\u5c14\u8f9b\u57fa",
+    "Zrinjski Mostar": "\u83ab\u65af\u5854\u5c14\u65e5\u6797\u65af\u57fa",
+    "Valur Reykjavik": "\u96f7\u514b\u96c5\u672a\u514b\u74e6\u9c81\u5c14",
+    "Panathinaikos": "\u5e15\u7eb3\u8f9b\u5948\u79d1\u65af",
+    "Paksi SE": "\u5e15\u514b\u65af",
+    "KAA Gent": "\u6839\u7279",
+    "LNZ Cherkasy": "\u5207\u5c14\u5361\u745f",
+    "GKS Katowice": "\u5361\u6258\u7ef4\u5179",
+    "MSK Zilina": "\u65e5\u5229\u7eb3",
+    "CFR Cluj-Napoca": "\u514b\u5362\u65e5",
+    "Alashkert FC": "\u963f\u62c9\u4ec0\u79d1\u7279",
+    "Austria Vienna": "\u5965\u5730\u5229\u7ef4\u4e5f\u7eb3",
+    "FK Liepaja": "\u5229\u8036\u5e15\u4e9a",
+    "UNA Strassen": "\u65af\u7279\u62c9\u68ee",
+    "Partizan Belgrade": "\u8d1d\u5c14\u683c\u83b1\u5fb7\u6e38\u51fb",
+    "Vestri": "\u7ef4\u65af\u7279\u91cc",
+    "Rigas Futbola Skola": "\u91cc\u52a0\u8db3\u7403\u5b66\u6821",
+    "Ludogorets Razgrad": "\u5362\u591a\u6208\u96f7\u8328",
+    "Hapoel Tel Aviv": "\u7279\u62c9\u7ef4\u592b\u590f\u666e\u5c14",
+    "KF Shk\u00ebndija": "\u65af\u80af\u8fea\u4e9a",
+    "NK Bravo": "\u5e03\u62c9\u6c83",
+    "Ajax Amsterdam": "\u963f\u8d3e\u514b\u65af",
+    "Vojvodina": "\u4f0f\u4f0a\u4f0f\u4e01\u90a3",
+    "Valletta": "\u74e6\u83b1\u5854",
+    "Rak\u00f3w Czestochowa": "\u7434\u65af\u6258\u970d\u74e6\u62c9\u79d1\u592b",
+    "The New Saints": "\u65b0\u5723\u5f92",
+    "Flora": "\u5f17\u6d1b\u62c9",
+    "Derry City": "\u5fb7\u91cc\u57ce",
+    "Rijeka": "\u91cc\u8036\u5361",
+    "Zalgiris Vilnius": "\u7ef4\u5c14\u7ebd\u65af\u624e\u5c14\u5409\u91cc\u65af",
+    "Dinamo Tbilisi": "\u7b2c\u6bd4\u5229\u65af\u8fea\u7eb3\u6469",
+    "Velez Mostar": "\u83ab\u65af\u5854\u5c14\u7ef4\u5217\u5179",
+    "Dunajska Streda": "\u591a\u7459\u65af\u7279\u96f7\u8fbe",
+    "SK Brann": "\u5e03\u5170",
+    "Universitatea Cluj": "\u514b\u5362\u65e5\u5927\u5b66",
+    "Petrocub": "\u4f69\u7279\u7f57\u5e93\u5e03",
+    "Borac Banja Luka": "\u5df4\u5c3c\u4e9a\u5362\u5361\u535a\u62c9\u8328",
+    "HB Torshavn": "\u6258\u5c14\u65af\u6e2f",
+    "Motherwell": "\u9a6c\u745f\u97e6\u5c14",
+    "Gy\u00f6ri ETO FC": "\u6770\u5c14",
+    "FC Atert Bissen": "\u963f\u7279\u7279\u6bd4\u68ee",
+    "FC Nordsj\u00e6lland": "\u5317\u897f\u5170",
+    "GAIS": "\u54e5\u5fb7\u5821\u76d6\u65af",
+    "Zira FK": "\u9f50\u62c9",
+    "Paide Linnameeskond": "\u6d3e\u5fb7",
+    "Jablonec": "\u4e9a\u5e03\u6d1b\u5185\u8328",
+    "Varteks": "\u74e6\u5c14\u7279\u514b\u65af",
+    "FK Auda": "\u5965\u8fbe",
+    "FCSB": "\u5e03\u52a0\u52d2\u65af\u7279\u661f",
+    "FC Noah": "\u8bfa\u4e9a",
+    "Zimbru Chisinau": "\u57fa\u5e0c\u8bb7\u4e4c\u91ce\u725b",
+    "FC Inter Turku": "\u56fe\u5c14\u5e93\u56fd\u9645",
+    "Istanbul Basaksehir": "\u4f0a\u65af\u5766\u5e03\u5c14\u5df4\u8428\u514b\u8d5b\u5c14",
+    "FC Ilves": "\u4f0a\u5c14\u7ef4\u65af",
+    "Stjarnan": "\u65af\u5854\u5c14\u5357",
+    "Tobol Kostanay": "\u79d1\u65af\u5854\u5948\u6258\u535a\u5c14",
+    "Panevezys": "\u5e15\u5185\u97e6\u65e5\u65af",
+    "Atl\u00e8tic Club d'Escaldes": "\u57c3\u65af\u5361\u5c14\u5fb7\u65af\u7ade\u6280",
+    "FC Vaduz": "\u74e6\u675c\u5179",
+    "Benfica": "\u672c\u83f2\u5361",
+    "St. Gallen": "\u5723\u52a0\u4ed1",
+    "PAOK": "\u585e\u8428\u6d1b\u5c3c\u57fa",
+    "Dynamo Kyiv": "\u57fa\u8f85\u8fea\u7eb3\u6469",
+    "Pafos": "\u5e15\u798f\u65af",
+    "Hajduk Split": "\u65af\u666e\u5229\u7279\u6d77\u675c\u514b",
+    "FC Midtjylland": "\u4e2d\u65e5\u5fb7\u5170",
+    "Besiktas": "\u8d1d\u897f\u514b\u5854\u65af",
+    "Maccabi Tel-Aviv": "\u7279\u62c9\u7ef4\u592b\u9a6c\u5361\u6bd4",
+    "Sheriff Tiraspol": "\u8482\u62c9\u65af\u6ce2\u5c14\u8b66\u957f",
+    "Talleres (C\u00f3rdoba)": "\u79d1\u5c14\u591a\u74e6\u5854\u52d2\u745e\u65af",
+    "Independiente Rivadavia": "\u95e8\u591a\u8428\u72ec\u7acb",
+    "Pyunik": "\u57c3\u91cc\u6e29\u51e4\u51f0",
+    "Debrecen": "\u5fb7\u5e03\u52d2\u68ee",
+})
+
 _TEAM_LOOKUP = {_normalize_name(key): value for key, value in TEAM_NAME_TRANSLATIONS.items()}
+
+_LEAGUE_NAME_LOOKUP = {_normalize_name(key): value for key, value in LEAGUE_LABELS_BY_NAME.items()}
