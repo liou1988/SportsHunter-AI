@@ -136,7 +136,7 @@ def check_data_quality(datahub: DataHub, max_odds_fixtures: int = 12) -> dict[st
 def _provider_status(datahub: DataHub) -> dict[str, Any]:
     try:
         provider = datahub.provider
-        health = provider.last_health
+        health = provider.last_health or datahub.provider_status()
         if health is None:
             return {
                 "provider": provider.name,
