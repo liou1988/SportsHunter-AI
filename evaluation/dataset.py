@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from database import models as orm
 from database.repositories import SportsRepository
 from database.session import SessionLocal
+from telegram_bot.localization import translate_league_name, translate_match_text
 
 SessionFactory = Callable[[], Session]
 
@@ -73,8 +74,8 @@ def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.Mat
     row = {
         "prediction_id": prediction.id,
         "fixture_id": fixture.id,
-        "league": fixture.league.name if fixture.league else "unknown",
-        "fixture": f"{fixture.home_team.name} vs {fixture.away_team.name}",
+        "league": translate_league_name(fixture.league.name if fixture.league else "unknown"),
+        "fixture": translate_match_text(f"{fixture.home_team.name} vs {fixture.away_team.name}"),
         "signal": prediction.signal,
         "stake": stake,
         "hunter_score": prediction.hunter_score,
@@ -197,15 +198,17 @@ def _primary_error_module(row: dict, breakdown_json: dict) -> str | None:
 def _learning_note(row: dict) -> str:
     if row.get("won"):
         return (
-            "推荐方向命中，当前评分、风险和市场信号保持一致；"
-            f"预测比分 {row.get('predicted_score')}，实际比分 {_result_score(row)}，"
-            f"比分误差 {row.get('score_error')}，大小球 {row.get('total_goals_hit')}，让球 {row.get('handicap_hit')}。"
+            "\u63a8\u8350\u65b9\u5411\u547d\u4e2d\uff0c\u5f53\u524d\u8bc4\u5206\u3001\u98ce\u9669\u548c\u5e02\u573a\u4fe1\u53f7\u4fdd\u6301\u4e00\u81f4\uff1b"
+            f"\u9884\u6d4b\u6bd4\u5206 {row.get('predicted_score')}\uff0c\u5b9e\u9645\u6bd4\u5206 {_result_score(row)}\uff0c"
+            f"\u6bd4\u5206\u8bef\u5dee {row.get('score_error')}\uff0c\u5927\u5c0f\u7403 {_hit_label(row.get('total_goals_hit'))}\uff0c"
+            f"\u8ba9\u7403 {_hit_label(row.get('handicap_hit'))}\u3002"
         )
     module = row.get("primary_error_module") or "unknown"
     return (
-        f"推荐未命中，需要复核 {module}；"
-        f"预测比分 {row.get('predicted_score')}，实际比分 {_result_score(row)}，"
-        f"比分误差 {row.get('score_error')}，大小球 {row.get('total_goals_hit')}，让球 {row.get('handicap_hit')}。"
+        f"\u63a8\u8350\u672a\u547d\u4e2d\uff0c\u9700\u8981\u590d\u6838 {_learning_module_label(module)}\uff1b"
+        f"\u9884\u6d4b\u6bd4\u5206 {row.get('predicted_score')}\uff0c\u5b9e\u9645\u6bd4\u5206 {_result_score(row)}\uff0c"
+        f"\u6bd4\u5206\u8bef\u5dee {row.get('score_error')}\uff0c\u5927\u5c0f\u7403 {_hit_label(row.get('total_goals_hit'))}\uff0c"
+        f"\u8ba9\u7403 {_hit_label(row.get('handicap_hit'))}\u3002"
     )
 
 
@@ -215,3 +218,35 @@ def _result_score(row: dict) -> str:
     if home_score is None or away_score is None:
         return "-"
     return f"{home_score}-{away_score}"
+
+
+
+def _hit_label(value: object) -> str:
+    if value is True:
+        return "\u547d\u4e2d"
+    if value is False:
+        return "\u672a\u4e2d"
+    return "\u672a\u8bc4\u4f30"
+
+
+def _learning_module_label(module: str) -> str:
+    return {
+        "aligned_signal": "\u4fe1\u53f7\u4e00\u81f4\u6027",
+        "score_projection": "\u6bd4\u5206\u9884\u6d4b",
+        "totals_market": "\u5927\u5c0f\u7403\u76d8\u53e3",
+        "handicap_market": "\u8ba9\u7403\u76d8\u53e3",
+        "signal": "\u6700\u7ec8\u4fe1\u53f7",
+        "unknown": "\u672a\u77e5\u6a21\u5757",
+        "team_strength": "\u7403\u961f\u5b9e\u529b",
+        "recent_form": "\u8fd1\u671f\u72b6\u6001",
+        "attack": "\u8fdb\u653b\u6307\u6570",
+        "defense": "\u9632\u5b88\u6307\u6570",
+        "home_advantage": "\u4e3b\u573a\u4f18\u52bf",
+        "odds_movement": "\u8d54\u7387\u53d8\u5316",
+        "market_heat": "\u5e02\u573a\u70ed\u5ea6",
+        "league_strength": "\u8054\u8d5b\u5f3a\u5ea6",
+        "fatigue": "\u4f53\u80fd\u75b2\u52b3",
+        "injury": "\u4f24\u505c\u98ce\u9669",
+        "live_momentum": "\u6eda\u7403\u52a8\u80fd",
+    }.get(str(module), str(module))
+

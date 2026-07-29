@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from telegram_bot.localization import translate_signal
+
 
 class EvaluationAnalyzer:
     def explain(self, row: dict) -> str:
@@ -118,7 +120,7 @@ class EvaluationAnalyzer:
             reason = f"主要偏差来自 {_module_label(module)}，比分误差 {score_error if score_error is not None else '-'}。"
         return (
             f"{outcome}：{row.get('fixture', '-')}"
-            f" | 信号 {row.get('signal', '-')}"
+            f" | \u4fe1\u53f7 {translate_signal(str(row.get('signal', '-')))}"
             f" | 预测 {predicted_score}"
             f" | 赛果 {result}"
             f" | Hunter {hunter_score}"
