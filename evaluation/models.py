@@ -9,7 +9,7 @@ from datetime import date
 class EvaluationMetrics:
     hunter_hit_rate: float = 0.0
     signal_hit_rate: float = 0.0
-    risk_effectiveness: float = 0.0
+    risk_effectiveness: float | None = None
     confidence_calibration_error: float = 0.0
     roi: float = 0.0
     by_league: dict[str, float] = field(default_factory=dict)
@@ -40,7 +40,7 @@ class EvaluationReport:
             f"- 新增学习记录：{self.learning_records_created}",
             f"- Hunter 评分命中率：{self.metrics.hunter_hit_rate:.2%}",
             f"- 信号命中率：{self.metrics.signal_hit_rate:.2%}",
-            f"- 风险控制有效性：{self.metrics.risk_effectiveness:.2%}",
+            f"- 风险控制有效性：{_format_optional_percent(self.metrics.risk_effectiveness)}",
             f"- 信心校准误差：{self.metrics.confidence_calibration_error:.4f}",
             f"- ROI: {self.metrics.roi:.2%}",
             "",
@@ -101,6 +101,13 @@ def _format_list_items(items: list[str]) -> list[str]:
     if not items:
         return ["- 暂无数据。"]
     return [f"- {item}" for item in items]
+
+
+
+def _format_optional_percent(value: float | None) -> str:
+    if value is None:
+        return "暂无高风险/拦截样本"
+    return f"{value:.2%}"
 
 
 def _period_label(period: str) -> str:

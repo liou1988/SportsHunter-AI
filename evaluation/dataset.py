@@ -29,7 +29,8 @@ class EvaluationDataset:
         with self.session_factory() as session:
             repo = SportsRepository(session)
             settled = repo.settled_predictions(since=since)
-            return [_build_row(prediction, fixture, result) for prediction, fixture, result in settled]
+            latest_settled = _latest_prediction_per_fixture(settled)
+            return [_build_row(prediction, fixture, result) for prediction, fixture, result in latest_settled]
 
     def create_learning_records(self, rows: list[dict]) -> int:
         created = 0
@@ -58,6 +59,19 @@ class EvaluationDataset:
                 created += 1
             session.commit()
         return created
+
+
+def _latest_prediction_per_fixture(
+    settled: list[tuple[orm.Prediction, orm.Fixture, orm.MatchResult]],
+) -> list[tuple[orm.Prediction, orm.Fixture, orm.MatchResult]]:
+    latest: list[tuple[orm.Prediction, orm.Fixture, orm.MatchResult]] = []
+    seen_fixture_ids: set[int] = set()
+    for prediction, fixture, result in settled:
+        if fixture.id in seen_fixture_ids:
+            continue
+        seen_fixture_ids.add(fixture.id)
+        latest.append((prediction, fixture, result))
+    return latest
 
 
 def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.MatchResult) -> dict:

@@ -26,6 +26,8 @@ from core.signal.models import Signal
 from core.signal.rules import decide_signal
 from core.signal.strategy import SIGNAL_STRATEGY
 from evaluation.dataset import EvaluationDataset
+from evaluation.metrics import calculate_metrics
+from evaluation.models import EvaluationReport
 from evaluation.runner import EvaluationRunner
 from evaluation.settlement import SettlementService
 from optimizer.engine import ModelOptimizer
@@ -426,6 +428,24 @@ def test_recommendations_export_csv_endpoint(monkeypatch) -> None:
     assert "attachment" in response.headers["content-disposition"]
     assert "\u8054\u8d5b,\u6bd4\u8d5b" in response.text
 
+def test_evaluation_metrics_show_no_risk_sample_as_empty() -> None:
+    metrics = calculate_metrics([
+        {
+            "actionable": True,
+            "won": True,
+            "stake": 1,
+            "profit": 1,
+            "confidence": 0.8,
+            "risk_level": "LOW",
+            "market_results": {},
+        }
+    ])
+    report = EvaluationReport(period="daily", report_date=datetime.now(timezone.utc).date(), metrics=metrics, settled_count=1)
+
+    assert metrics.risk_effectiveness is None
+    assert "暂无高风险/拦截样本" in report.to_markdown()
+
+
 def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -467,6 +487,34 @@ def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path
     assert report.overview
     assert report.confidence_notes
     assert (tmp_path / "daily_report.md").exists()
+
+
+def test_evaluation_dataset_uses_latest_prediction_per_fixture(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+
+    first_id = PredictionArchive(session_factory=Session).save(result)
+    second_id = PredictionArchive(session_factory=Session).save(result)
+
+    with Session() as session:
+        first = session.get(Prediction, first_id)
+        second = session.get(Prediction, second_id)
+        assert first is not None
+        assert second is not None
+        first.created_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        second.created_at = datetime.now(timezone.utc)
+        session.commit()
+
+    result.fixture.status = FixtureStatus.FINISHED
+    result.fixture.score = Score(home=3, away=1)
+    SettlementService(session_factory=Session).settle_fixtures([result.fixture])
+
+    rows = EvaluationDataset(session_factory=Session).rows("daily")
+
+    assert len(rows) == 1
+    assert rows[0]["prediction_id"] == second_id
 
 
 def test_settlement_scans_pending_archived_predictions(mock_pipeline) -> None:
@@ -1269,7 +1317,7 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260730-review-cn2" in template
+    assert "20260730-review-dedupe" in template
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))

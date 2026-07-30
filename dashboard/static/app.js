@@ -282,7 +282,7 @@ function parseEvaluationMarkdown(markdown) {
     else if (item.startsWith("\u65b0\u589e\u5b66\u4e60\u8bb0\u5f55\uff1a")) report.learning_records_created = parseLooseNumber(item);
     else if (item.startsWith("Hunter \u8bc4\u5206\u547d\u4e2d\u7387\uff1a")) report.metrics.hunter_hit_rate = parseLoosePercent(item);
     else if (item.startsWith("\u4fe1\u53f7\u547d\u4e2d\u7387\uff1a")) report.metrics.signal_hit_rate = parseLoosePercent(item);
-    else if (item.startsWith("\u98ce\u9669\u63a7\u5236\u6709\u6548\u6027\uff1a")) report.metrics.risk_effectiveness = parseLoosePercent(item);
+    else if (item.startsWith("\u98ce\u9669\u63a7\u5236\u6709\u6548\u6027\uff1a")) report.metrics.risk_effectiveness = item.includes("\u6682\u65e0") ? null : parseLoosePercent(item);
     else if (item.startsWith("\u4fe1\u5fc3\u6821\u51c6\u8bef\u5dee\uff1a")) report.metrics.confidence_calibration_error = parseLooseNumber(item);
     else if (item.startsWith("ROI:")) report.metrics.roi = parseLoosePercent(item);
     else if (section === "\u8054\u8d5b\u8868\u73b0") assignRate(report.metrics.by_league, item);
@@ -313,6 +313,7 @@ function normalizeList(items) {
 }
 
 function metricClass(value, threshold, higherIsBetter = true, lowerIsBetter = false) {
+  if (value === null || value === undefined || value === "") return "";
   const number = Number(value);
   if (Number.isNaN(number)) return "";
   if (lowerIsBetter) return number <= threshold ? "good" : "warn";
@@ -903,7 +904,7 @@ function formatSignedNumber(value) {
 }
 
 function formatPercent(value) {
-  if (value === null || value === undefined || value === "") return "-";
+  if (value === null || value === undefined || value === "") return "\u6682\u65e0";
   const number = Number(value);
   if (Number.isNaN(number)) return String(value);
   return `${(number * 100).toFixed(0)}%`;
