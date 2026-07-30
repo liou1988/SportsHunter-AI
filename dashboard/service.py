@@ -544,6 +544,8 @@ def _localize_prediction_item(item: dict[str, Any]) -> dict[str, Any]:
             localized[key] = _localize_market_payload(localized[key])
     if localized.get("signal"):
         localized["signal_label"] = translate_signal(str(localized["signal"]))
+    if localized.get("fixture_status"):
+        localized["status_label"] = translate_fixture_status(str(localized["fixture_status"]))
     return localized
 
 

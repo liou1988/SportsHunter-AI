@@ -236,8 +236,10 @@ class SportsRepository:
         include_pass: bool = False,
     ) -> list[orm.Prediction]:
         query = select(orm.Prediction).order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id))
-        candidates = list(self.session.scalars(query.limit(max(limit * 10, limit))))
-        return _latest_prediction_per_fixture(candidates, limit=limit, include_pass=include_pass)
+        candidates = list(self.session.scalars(query.limit(max(limit * 20, limit))))
+        latest = _latest_prediction_per_fixture(candidates, limit=max(limit * 10, limit), include_pass=include_pass)
+        current = [prediction for prediction in latest if _is_current_recommendation_fixture(prediction.fixture)]
+        return current[:limit]
 
     def pending_settlement_fixtures(
         self,
@@ -324,6 +326,43 @@ class HistoryRepository:
         )
 
 
+_FINISHED_FIXTURE_STATUSES = {"finished", "postponed", "cancelled"}
+_CURRENT_FIXTURE_STATUSES = {"scheduled", "live", "unknown"}
+_RECOMMENDATION_START_GRACE = timedelta(minutes=15)
+
+
+def _is_current_recommendation_fixture(fixture: orm.Fixture | None, now: datetime | None = None) -> bool:
+    if fixture is None:
+        return False
+    if fixture.result is not None:
+        return False
+    status = str(fixture.status or "unknown").lower()
+    if status in _FINISHED_FIXTURE_STATUSES:
+        return False
+    if status not in _CURRENT_FIXTURE_STATUSES:
+        return False
+    if status == "live":
+        return True
+    start_time = _as_utc(fixture.start_time)
+    if start_time is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return start_time >= now - _RECOMMENDATION_START_GRACE
+
+
+def _iso_utc(value: datetime | None) -> str | None:
+    utc_value = _as_utc(value)
+    return utc_value.isoformat() if utc_value else None
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _latest_prediction_per_fixture(
     predictions: list[orm.Prediction],
     limit: int,
@@ -388,8 +427,13 @@ class DashboardRepository:
                 .limit(max(limit * 10, limit))
             )
         )
+        active_predictions = [
+            prediction
+            for prediction in _latest_prediction_per_fixture(candidates, limit=max(limit * 10, limit), include_pass=True)
+            if _is_current_recommendation_fixture(prediction.fixture)
+        ]
         predictions = sorted(
-            _latest_prediction_per_fixture(candidates, limit=max(limit * 10, limit), include_pass=True),
+            active_predictions,
             key=lambda prediction: (
                 prediction.confidence,
                 prediction.hunter_score,
@@ -408,8 +452,9 @@ class DashboardRepository:
                     "match": f"{fixture.home_team.name} 对阵 {fixture.away_team.name}",
                     "fixture": f"{fixture.home_team.name} vs {fixture.away_team.name}",
                     "league": fixture.league.name,
-                    "kickoff": fixture.start_time.isoformat(),
+                    "kickoff": _iso_utc(fixture.start_time),
                     "signal": prediction.signal,
+                    "fixture_status": fixture.status,
                     "hunter_score": prediction.hunter_score,
                     "confidence": prediction.confidence,
                     "stake": prediction.stake,

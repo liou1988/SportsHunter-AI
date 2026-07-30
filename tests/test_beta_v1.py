@@ -364,6 +364,48 @@ def test_archived_recommendations_read_from_prediction_archive(mock_pipeline) ->
 
 
 
+def test_archived_recommendations_skip_settled_fixtures(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    with Session() as session:
+        prediction = session.scalar(select(Prediction))
+        assert prediction is not None
+        fixture = prediction.fixture
+        fixture.status = FixtureStatus.FINISHED.value
+        SportsRepository(session).upsert_match_result(fixture, home_score=2, away_score=1)
+        session.commit()
+
+    payload = build_archived_recommendations(include_pass=True, session_factory=Session)
+
+    assert payload["count"] == 0
+    assert payload["items"] == []
+
+
+def test_dashboard_latest_predictions_skip_stale_started_fixtures(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    with Session() as session:
+        prediction = session.scalar(select(Prediction))
+        assert prediction is not None
+        fixture = prediction.fixture
+        fixture.status = FixtureStatus.SCHEDULED.value
+        fixture.start_time = datetime.now(timezone.utc) - timedelta(hours=3)
+        session.commit()
+
+    with Session() as session:
+        items = DashboardRepository(session).latest_predictions()
+
+    assert items == []
+
+
 def test_archived_recommendations_show_latest_fixture_once(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -790,7 +832,9 @@ def test_dashboard_latest_predictions_include_kickoff(mock_pipeline) -> None:
         items = DashboardRepository(session).latest_predictions()
 
     assert items
-    assert datetime.fromisoformat(items[0]["kickoff"]) == result.fixture.start_time.replace(tzinfo=None)
+    parsed_kickoff = datetime.fromisoformat(items[0]["kickoff"])
+    assert parsed_kickoff.tzinfo is not None
+    assert parsed_kickoff == result.fixture.start_time.astimezone(timezone.utc)
 
 def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     app.dependency_overrides[dashboard_get_datahub] = lambda: DataHub(MockProvider(mock_settings))
@@ -863,6 +907,23 @@ def test_recommendations_today_filters_pass_and_sorts_by_score() -> None:
     assert payload["items"][0]["total_goals"]["label"] == "大 2.5"
     assert payload["items"][0]["handicap"]["label"] == "主队 -0.25"
     assert "market_available" in payload["items"][0]["total_goals"]
+
+
+def test_today_recommendations_skip_finished_fixtures() -> None:
+    pipeline = _fake_recommendation_pipeline()
+    results = pipeline.run_today()
+    results[0].fixture.status = FixtureStatus.FINISHED
+
+    class FinishedAwarePipeline:
+        context = pipeline.context
+
+        def run_today(self) -> list:
+            return results
+
+    payload = build_today_recommendations(FinishedAwarePipeline(), include_pass=True, archive=False)
+
+    assert payload["count"] == 3
+    assert all(item["fixture_status"] != FixtureStatus.FINISHED.value for item in payload["items"])
 
 
 def test_recommendations_today_can_include_pass() -> None:
@@ -1310,6 +1371,12 @@ def test_archive_today_predictions_job_returns_archive_summary(monkeypatch) -> N
 
 
 
+def test_dashboard_frontend_formats_kickoff_as_beijing_time() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+
+    assert 'timeZone: "Asia/Shanghai"' in script
+
+
 def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
     template = Path("dashboard/templates/index.html").read_text(encoding="utf-8")
@@ -1317,7 +1384,7 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260730-review-dedupe" in template
+    assert "20260730-live-time" in template
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))
@@ -1788,7 +1855,7 @@ def _fake_recommendation_pipeline():
             league=league,
             home_team=home,
             away_team=away,
-            start_time=datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc),
+            start_time=datetime.now(timezone.utc) + timedelta(hours=4),
             status=FixtureStatus.SCHEDULED,
             score=Score(),
             provider="mock",

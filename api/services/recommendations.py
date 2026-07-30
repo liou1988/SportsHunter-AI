@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import csv
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from typing import Any
 
@@ -13,7 +14,7 @@ from datahub.models import OddsMarket, to_plain_dict
 from pipeline.archive import ArchiveBatchResult, PredictionArchive
 from pipeline.models import PredictionResult
 
-from telegram_bot.localization import translate_league_name, translate_match_text, translate_signal, translate_team_name
+from telegram_bot.localization import translate_fixture_status, translate_league_name, translate_match_text, translate_signal, translate_team_name
 from pipeline.runner import PredictionPipeline
 
 SessionFactory = Callable[[], Session]
@@ -26,15 +27,16 @@ def build_today_recommendations(
     prediction_archive: PredictionArchive | None = None,
 ) -> dict:
     results = pipeline.run_today()
+    current_results = [result for result in results if _is_current_fixture(result.fixture)]
     archive_result = (
-        (prediction_archive or PredictionArchive()).save_many_if_changed(results)
+        (prediction_archive or PredictionArchive()).save_many_if_changed(current_results)
         if archive
         else ArchiveBatchResult()
     )
     prediction_ids = archive_result.prediction_ids_by_fixture()
     filtered = [
         result
-        for result in results
+        for result in current_results
         if include_pass or result.signal.signal.value != "PASS"
     ]
     sorted_results = sorted(filtered, key=lambda result: result.hunter_score.score, reverse=True)
@@ -129,6 +131,41 @@ def _export_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_FINISHED_FIXTURE_STATUSES = {"finished", "postponed", "cancelled"}
+_CURRENT_FIXTURE_STATUSES = {"scheduled", "live", "unknown"}
+_RECOMMENDATION_START_GRACE = timedelta(minutes=15)
+
+
+def _is_current_fixture(fixture: Any, now: datetime | None = None) -> bool:
+    if fixture is None:
+        return False
+    status = str(getattr(fixture, "status", "unknown") or "unknown").lower()
+    if status in _FINISHED_FIXTURE_STATUSES:
+        return False
+    if status not in _CURRENT_FIXTURE_STATUSES:
+        return False
+    if status == "live":
+        return True
+    start_time = _as_utc(getattr(fixture, "start_time", None))
+    if start_time is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return start_time >= now - _RECOMMENDATION_START_GRACE
+
+
+def _iso_utc(value: datetime | None) -> str | None:
+    utc_value = _as_utc(value)
+    return utc_value.isoformat() if utc_value else None
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _recommendation_item(pipeline: PredictionPipeline, result: PredictionResult, prediction_id: int | None = None) -> dict:
     fixture = result.fixture
     odds = _fixture_odds(pipeline, fixture.id)
@@ -138,10 +175,12 @@ def _recommendation_item(pipeline: PredictionPipeline, result: PredictionResult,
         "fixture_id": fixture.id,
         "league": translate_league_name(fixture.league.name),
         "match": translate_match_text(f"{fixture.home_team.name} vs {fixture.away_team.name}"),
-        "kickoff": fixture.start_time.isoformat(),
+        "kickoff": _iso_utc(fixture.start_time),
         "hunter_score": result.hunter_score.score,
         "confidence": result.hunter_score.confidence,
         "signal": result.signal.signal.value,
+        "fixture_status": fixture.status.value,
+        "status_label": translate_fixture_status(fixture.status.value),
         "predicted_side": translate_team_name(result.predicted_side) if result.predicted_side else None,
         "stake": _format_stake(result.signal.stake),
         "reason": result.signal.reason,
@@ -161,10 +200,12 @@ def _archived_recommendation_item(prediction: Any) -> dict[str, Any]:
         "fixture_id": fixture.provider_fixture_id,
         "league": translate_league_name(fixture.league.name) if fixture.league else "-",
         "match": translate_match_text(f"{fixture.home_team.name} vs {fixture.away_team.name}"),
-        "kickoff": fixture.start_time.isoformat(),
+        "kickoff": _iso_utc(fixture.start_time),
         "hunter_score": prediction.hunter_score,
         "confidence": prediction.confidence,
         "signal": prediction.signal,
+        "fixture_status": fixture.status,
+        "status_label": translate_fixture_status(fixture.status),
         "predicted_side": translate_team_name(prediction.predicted_side) if prediction.predicted_side else None,
         "stake": _format_stake(prediction.stake),
         "reason": prediction.reason,
