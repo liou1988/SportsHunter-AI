@@ -528,6 +528,7 @@ function renderRecommendations(items) {
   const body = $("recommendations-body");
   const filteredItems = filterRecommendations(items);
   $("recommendation-count").textContent = filteredItems.length;
+  renderRecommendationSummary(filteredItems, items.length);
   if (!filteredItems.length) {
     body.innerHTML = `<tr><td colspan="7">&#24403;&#21069;&#31579;&#36873;&#26465;&#20214;&#19979;&#26242;&#26080;&#25512;&#33616;&#12290;</td></tr>`;
     return;
@@ -545,7 +546,7 @@ function renderRecommendations(items) {
         </td>
         <td class="time-cell">
           <strong>${escapeHtml(formatKickoffShort(item.kickoff))}</strong>
-          <small>&#21271;&#20140;&#26102;&#38388;</small>
+          <small>${escapeHtml(formatKickoffDistance(item.kickoff, item.fixture_status))}</small>
         </td>
         <td>
           <span class="badge">${escapeHtml(item.signal_label || translateSignal(item.signal))}</span>
@@ -567,6 +568,29 @@ function renderRecommendations(items) {
       </tr>
     `;
   }).join("");
+}
+
+function renderRecommendationSummary(items, totalCount) {
+  const root = $("recommendation-summary");
+  if (!root) return;
+  const counts = items.reduce((acc, item) => {
+    const signal = String(item.signal || "UNKNOWN");
+    acc[signal] = (acc[signal] || 0) + 1;
+    return acc;
+  }, {});
+  const nextItem = sortRecommendations(items)[0];
+  const nextText = nextItem ? `${formatKickoffShort(nextItem.kickoff)} ${itemMatchText(nextItem)}` : "\u65e0";
+  root.innerHTML = [
+    `<span>\u5f53\u524d\u7b5b\u9009 ${items.length} / ${totalCount} \u573a</span>`,
+    `<span>\u63a8\u8350 ${Number(counts.STRONG_BUY || 0) + Number(counts.BUY || 0)} \u573a</span>`,
+    `<span>\u89c2\u5bdf ${counts.WATCH || 0} \u573a</span>`,
+    `<span>\u8df3\u8fc7 ${counts.PASS || 0} \u573a</span>`,
+    `<span>\u6700\u8fd1\u5f00\u8d5b\uff1a${escapeHtml(nextText)}</span>`,
+  ].join("");
+}
+
+function itemMatchText(item) {
+  return item.match || "-";
 }
 
 function populateRecommendationFilters(items) {
@@ -602,7 +626,7 @@ function matchesRecommendationTimeFilter(kickoff) {
   const date = new Date(kickoff || 0);
   if (Number.isNaN(date.getTime())) return false;
   const now = new Date();
-  if (state.recommendationTimeFilter === "today") return localDateKey(date) === localDateKey(now);
+  if (state.recommendationTimeFilter === "today") return beijingDateKey(date) === beijingDateKey(now);
   if (state.recommendationTimeFilter === "upcoming") return date.getTime() >= now.getTime();
   if (state.recommendationTimeFilter === "next24h") {
     const diff = date.getTime() - now.getTime();
@@ -611,8 +635,17 @@ function matchesRecommendationTimeFilter(kickoff) {
   return true;
 }
 
+function beijingDateKey(date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
 function localDateKey(date) {
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+  return beijingDateKey(date);
 }
 
 function currentRecommendationRows() {
@@ -628,7 +661,7 @@ function exportCurrentRecommendations() {
   const columns = [
     ["\u8054\u8d5b", (item) => item.league],
     ["\u6bd4\u8d5b", (item) => item.match],
-    ["\u5f00\u8d5b\u65f6\u95f4", (item) => item.kickoff],
+    ["\u5f00\u8d5b\u65f6\u95f4", (item) => formatKickoffFull(item.kickoff)],
     ["\u4fe1\u53f7", (item) => item.signal_label || translateSignal(item.signal)],
     ["Hunter\u8bc4\u5206", (item) => item.hunter_score],
     ["\u4fe1\u5fc3", (item) => item.confidence],
@@ -868,6 +901,38 @@ function formatSeconds(value) {
   const number = Number(value);
   if (Number.isNaN(number)) return String(value);
   return `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")} 秒`;
+}
+
+function formatKickoffDistance(value, status) {
+  const label = translateFixtureStatus(status);
+  if (String(status || "").toLowerCase() === "live") return label || "\u8fdb\u884c\u4e2d";
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return label || "\u5317\u4eac\u65f6\u95f4";
+  const minutes = Math.round((date.getTime() - Date.now()) / 60000);
+  if (minutes < -15) return label && label !== status ? label : "\u5df2\u5f00\u8d5b";
+  if (minutes <= 0) return "\u5373\u5c06\u5f00\u8d5b";
+  if (minutes < 60) return `\u8ddd\u5f00\u8d5b ${minutes} \u5206\u949f`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return restMinutes ? `\u8ddd\u5f00\u8d5b ${hours}\u5c0f\u65f6${restMinutes}\u5206` : `\u8ddd\u5f00\u8d5b ${hours}\u5c0f\u65f6`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours ? `\u8ddd\u5f00\u8d5b ${days}\u5929${restHours}\u5c0f\u65f6` : `\u8ddd\u5f00\u8d5b ${days}\u5929`;
+}
+
+function formatKickoffFull(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function formatKickoffShort(value) {

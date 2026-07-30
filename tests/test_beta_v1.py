@@ -1371,6 +1371,32 @@ def test_archive_today_predictions_job_returns_archive_summary(monkeypatch) -> N
 
 
 
+def test_dashboard_frontend_shows_recommendation_summary() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+    template = Path("dashboard/templates/index.html").read_text(encoding="utf-8")
+
+    assert 'id="recommendation-summary"' in template
+    assert "function renderRecommendationSummary" in script
+    assert "\\u5f53\\u524d\\u7b5b\\u9009" in script
+    assert "itemMatchText" in script
+
+
+def test_dashboard_frontend_shows_kickoff_distance() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+
+    assert "function formatKickoffDistance" in script
+    assert "\\u8ddd\\u5f00\\u8d5b" in script
+    assert "\\u5373\\u5c06\\u5f00\\u8d5b" in script
+
+
+def test_dashboard_frontend_uses_beijing_time_for_filters_and_export() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+
+    assert "function beijingDateKey" in script
+    assert 'timeZone: "Asia/Shanghai"' in script
+    assert 'formatKickoffFull(item.kickoff)' in script
+
+
 def test_dashboard_frontend_formats_kickoff_as_beijing_time() -> None:
     script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
 
@@ -1384,7 +1410,7 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260730-live-time" in template
+    assert "20260730-ux3" in template
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))
