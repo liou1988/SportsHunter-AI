@@ -1260,6 +1260,17 @@ def test_archive_today_predictions_job_returns_archive_summary(monkeypatch) -> N
     assert jobs.archive_today_predictions() == {"created_count": 1, "reused_count": 0, "failed_count": 0}
 
 
+
+
+def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+    template = Path("dashboard/templates/index.html").read_text(encoding="utf-8")
+    assert "function translateLeagueName" in script
+    assert "target[translateLeagueName(name.trim())]" in script
+    assert "Argentine Liga Profesional de Futbol" in script
+    assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
+    assert "20260730-review-cn2" in template
+
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))
     try:

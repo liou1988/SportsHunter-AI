@@ -295,7 +295,7 @@ function parseEvaluationMarkdown(markdown) {
 function assignRate(target, item) {
   const [name, value] = String(item).split("\uff1a");
   if (!name || value === undefined) return;
-  target[name.trim()] = parseLoosePercent(value);
+  target[translateLeagueName(name.trim())] = parseLoosePercent(value);
 }
 
 function parseLooseNumber(value) {
@@ -446,7 +446,7 @@ function renderRankList(id, items) {
     <div class="rank-row">
       <span>${index + 1}</span>
       <div>
-        <strong>${escapeHtml(item.league || "-")}</strong>
+        <strong>${escapeHtml(translateLeagueName(item.league || "-"))}</strong>
         <small>${formatNumber(item.wins)}胜 ${formatNumber(item.losses)}负 · ROI ${formatPercent(item.roi)}</small>
       </div>
       <strong>${formatPercent(item.hit_rate)}</strong>
@@ -500,7 +500,7 @@ function renderQualityFixtures(fixtures, errors) {
     <div class="list-row">
       <div>
         <strong>${escapeHtml(item.match || "-")}</strong>
-        <span>${escapeHtml(item.league || "-")} · ${escapeHtml(item.status_label || translateFixtureStatus(item.status))}</span>
+        <span>${escapeHtml(translateLeagueName(item.league || "-"))} · ${escapeHtml(item.status_label || translateFixtureStatus(item.status))}</span>
       </div>
       <div class="list-meta">
         <span>${escapeHtml(formatMarketList(item.odds_markets || []))}</span>
@@ -540,7 +540,7 @@ function renderRecommendations(items) {
       <tr>
         <td>
           <strong>${escapeHtml(item.match || "-")}</strong>
-          <small>${escapeHtml(item.league || "-")}</small>
+          <small>${escapeHtml(translateLeagueName(item.league || "-"))}</small>
         </td>
         <td class="time-cell">
           <strong>${escapeHtml(formatKickoffShort(item.kickoff))}</strong>
@@ -706,7 +706,7 @@ function renderLatestPredictions(items) {
     <div class="list-row">
       <div>
         <strong>${escapeHtml(item.fixture || "-")}</strong>
-        <span>${escapeHtml(item.league || "-")} · ${formatTime(item.created_at)}</span>
+        <span>${escapeHtml(translateLeagueName(item.league || "-"))} · ${formatTime(item.created_at)}</span>
       </div>
       <div class="list-meta">
         <span class="badge">${escapeHtml(item.signal_label || translateSignal(item.signal))}</span>
@@ -771,6 +771,28 @@ function translateSignal(value) {
     BLOCK: "风控拦截",
   };
   return map[String(value)] || value || "-";
+}
+
+function translateLeagueName(value) {
+  const text = String(value || "").trim();
+  const map = {
+    "Argentine Liga Profesional de Futbol": "\u963f\u6839\u5ef7\u7532\u7ea7\u8054\u8d5b",
+    "Argentine Primera Nacional": "\u963f\u6839\u5ef7\u4e59\u7ea7\u8054\u8d5b",
+    "Brazilian Serie A": "\u5df4\u897f\u7532\u7ea7\u8054\u8d5b",
+    "Brazilian Serie B": "\u5df4\u897f\u4e59\u7ea7\u8054\u8d5b",
+    "English Premier League": "\u82f1\u683c\u5170\u8d85\u7ea7\u8054\u8d5b",
+    "UEFA Champions League Qualifying": "\u6b27\u6d32\u51a0\u519b\u8054\u8d5b\u8d44\u683c\u8d5b",
+    "UEFA Europa League Qualifying": "\u6b27\u8db3\u8054\u6b27\u6d32\u8054\u8d5b\u8d44\u683c\u8d5b",
+    "UEFA Europa Conference League Qualifying": "\u6b27\u8db3\u8054\u6b27\u6d32\u534f\u4f1a\u8054\u8d5b\u8d44\u683c\u8d5b",
+    "Colombian Primera A": "\u54e5\u4f26\u6bd4\u4e9a\u7532\u7ea7\u8054\u8d5b",
+    "Liga de Expansion MX": "\u58a8\u897f\u54e5\u6269\u5c55\u8054\u8d5b",
+    "Major League Soccer": "\u7f8e\u56fd\u804c\u4e1a\u8db3\u7403\u5927\u8054\u76df",
+    "USL Championship": "\u7f8e\u56fd\u8db3\u7403\u51a0\u519b\u8054\u8d5b",
+    "American USL Championship": "\u7f8e\u56fd\u8db3\u7403\u51a0\u519b\u8054\u8d5b",
+    "USL League One": "\u7f8e\u56fd\u8db3\u7403\u7532\u7ea7\u8054\u8d5b",
+    "American USL League One": "\u7f8e\u56fd\u8db3\u7403\u7532\u7ea7\u8054\u8d5b",
+  };
+  return map[text] || text || "-";
 }
 
 function translateFixtureStatus(value) {
