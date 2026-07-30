@@ -134,6 +134,7 @@ def _export_row(item: dict[str, Any]) -> dict[str, Any]:
 _FINISHED_FIXTURE_STATUSES = {"finished", "postponed", "cancelled"}
 _CURRENT_FIXTURE_STATUSES = {"scheduled", "live", "unknown"}
 _RECOMMENDATION_START_GRACE = timedelta(minutes=15)
+_LIVE_FIXTURE_MAX_AGE = timedelta(hours=3)
 
 
 def _is_current_fixture(fixture: Any, now: datetime | None = None) -> bool:
@@ -144,12 +145,12 @@ def _is_current_fixture(fixture: Any, now: datetime | None = None) -> bool:
         return False
     if status not in _CURRENT_FIXTURE_STATUSES:
         return False
-    if status == "live":
-        return True
     start_time = _as_utc(getattr(fixture, "start_time", None))
     if start_time is None:
         return False
     now = now or datetime.now(timezone.utc)
+    if status == "live":
+        return start_time >= now - _LIVE_FIXTURE_MAX_AGE
     return start_time >= now - _RECOMMENDATION_START_GRACE
 
 

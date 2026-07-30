@@ -34,8 +34,11 @@ from optimizer.engine import ModelOptimizer
 from optimizer import scheduler as optimizer_scheduler
 from optimizer.weights import load_active_rating_weights
 from pipeline.archive import PredictionArchive
+from pipeline.market_model import MarketPredictionModel
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
+from features.models import FeatureVector
+from features.pipeline import FeatureBuilder
 from api import dependencies
 from api.services.recommendations import (
     build_archived_recommendations,
@@ -323,6 +326,82 @@ def test_prediction_archive_reuses_unchanged_snapshot(mock_pipeline) -> None:
     assert second.prediction_id == first.prediction_id
 
 
+def test_feature_builder_missing_data_stays_neutral() -> None:
+    fixture = Fixture(
+        id="neutral-fixture",
+        league=League(id="eng.1", name="Premier League"),
+        home_team=Team(id="home", name="Home"),
+        away_team=Team(id="away", name="Away"),
+        start_time=datetime.now(timezone.utc),
+    )
+
+    class MissingDataHub:
+        def get_fixture(self, fixture_id: str) -> Fixture:
+            assert fixture_id == fixture.id
+            return fixture
+
+        def get_odds(self, fixture_id: str) -> list:
+            raise RuntimeError("odds missing")
+
+        def get_statistics(self, fixture_id: str):
+            raise RuntimeError("stats missing")
+
+    vector = FeatureBuilder(MissingDataHub()).build(fixture.id)
+
+    assert vector.features["home_recent_form"] == 50.0
+    assert vector.features["away_recent_form"] == 50.0
+    assert vector.features["home_attack_index"] == 50.0
+    assert vector.features["away_attack_index"] == 50.0
+    assert vector.features["elo_difference"] == 50.0
+    assert vector.features["market_heat"] == 50.0
+    assert vector.features["home_advantage"] == 56.0
+    assert "odds_unavailable" in vector.warnings
+    assert "statistics_unavailable" in vector.warnings
+
+
+def test_market_prediction_scoreline_varies_with_match_profile() -> None:
+    model = MarketPredictionModel()
+    fixture = Fixture(
+        id="market-test",
+        league=League(id="league", name="Debug League"),
+        home_team=Team(id="home", name="Home"),
+        away_team=Team(id="away", name="Away"),
+        start_time=datetime.now(timezone.utc),
+    )
+    base = {name: 50.0 for name in [
+        "home_recent_form",
+        "away_recent_form",
+        "home_attack_index",
+        "away_attack_index",
+        "home_defense_index",
+        "away_defense_index",
+        "elo_difference",
+        "odds_move",
+        "market_heat",
+        "fatigue_index",
+        "home_advantage",
+        "injury_index",
+        "live_momentum",
+        "league_strength",
+    ]}
+
+    def score(overrides: dict[str, float]) -> tuple[str, str, str | None]:
+        prediction = model.predict(fixture, FeatureVector("market-test", base | overrides), [])
+        return prediction.score.text, prediction.moneyline_pick, prediction.predicted_side
+
+    neutral = score({})
+    home_strong = score({"home_attack_index": 70, "away_attack_index": 40, "elo_difference": 65, "home_advantage": 65})
+    away_strong = score({"home_attack_index": 40, "away_attack_index": 70, "elo_difference": 35, "home_advantage": 45})
+    low_total = score({"home_attack_index": 35, "away_attack_index": 35, "home_defense_index": 70, "away_defense_index": 70})
+    high_total = score({"home_attack_index": 78, "away_attack_index": 76, "home_defense_index": 35, "away_defense_index": 35})
+
+    assert neutral[1] == "DRAW"
+    assert home_strong[1:] == ("HOME", "Home")
+    assert away_strong[1:] == ("AWAY", "Away")
+    assert len({neutral[0], home_strong[0], away_strong[0], low_total[0], high_total[0]}) >= 4
+    assert not all(item == "2-1" for item in [neutral[0], home_strong[0], away_strong[0], low_total[0], high_total[0]])
+
+
 def test_today_recommendations_archive_prediction_results(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -383,6 +462,46 @@ def test_archived_recommendations_skip_settled_fixtures(mock_pipeline) -> None:
 
     assert payload["count"] == 0
     assert payload["items"] == []
+
+
+def test_dashboard_latest_predictions_skip_previous_beijing_day_predictions(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    with Session() as session:
+        prediction = session.scalar(select(Prediction))
+        assert prediction is not None
+        prediction.created_at = datetime.now(timezone.utc) - timedelta(days=1)
+        session.commit()
+
+    with Session() as session:
+        items = DashboardRepository(session).latest_predictions()
+
+    assert items == []
+
+
+def test_dashboard_latest_predictions_skip_stale_live_fixtures(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    with Session() as session:
+        prediction = session.scalar(select(Prediction))
+        assert prediction is not None
+        fixture = prediction.fixture
+        fixture.status = FixtureStatus.LIVE.value
+        fixture.start_time = datetime.now(timezone.utc) - timedelta(hours=5)
+        session.commit()
+
+    with Session() as session:
+        items = DashboardRepository(session).latest_predictions()
+
+    assert items == []
 
 
 def test_dashboard_latest_predictions_skip_stale_started_fixtures(mock_pipeline) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
@@ -235,7 +236,11 @@ class SportsRepository:
         limit: int = 50,
         include_pass: bool = False,
     ) -> list[orm.Prediction]:
-        query = select(orm.Prediction).order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id))
+        query = (
+            select(orm.Prediction)
+            .where(orm.Prediction.created_at >= _beijing_day_start_utc())
+            .order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id))
+        )
         candidates = list(self.session.scalars(query.limit(max(limit * 20, limit))))
         latest = _latest_prediction_per_fixture(candidates, limit=max(limit * 10, limit), include_pass=include_pass)
         current = [prediction for prediction in latest if _is_current_recommendation_fixture(prediction.fixture)]
@@ -329,6 +334,13 @@ class HistoryRepository:
 _FINISHED_FIXTURE_STATUSES = {"finished", "postponed", "cancelled"}
 _CURRENT_FIXTURE_STATUSES = {"scheduled", "live", "unknown"}
 _RECOMMENDATION_START_GRACE = timedelta(minutes=15)
+_LIVE_FIXTURE_MAX_AGE = timedelta(hours=3)
+
+
+def _beijing_day_start_utc(now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    beijing_now = now.astimezone(ZoneInfo("Asia/Shanghai"))
+    return beijing_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
 def _is_current_recommendation_fixture(fixture: orm.Fixture | None, now: datetime | None = None) -> bool:
@@ -341,12 +353,12 @@ def _is_current_recommendation_fixture(fixture: orm.Fixture | None, now: datetim
         return False
     if status not in _CURRENT_FIXTURE_STATUSES:
         return False
-    if status == "live":
-        return True
     start_time = _as_utc(fixture.start_time)
     if start_time is None:
         return False
     now = now or datetime.now(timezone.utc)
+    if status == "live":
+        return start_time >= now - _LIVE_FIXTURE_MAX_AGE
     return start_time >= now - _RECOMMENDATION_START_GRACE
 
 
@@ -423,6 +435,7 @@ class DashboardRepository:
         candidates = list(
             self.session.scalars(
                 select(orm.Prediction)
+                .where(orm.Prediction.created_at >= _beijing_day_start_utc())
                 .order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id))
                 .limit(max(limit * 10, limit))
             )

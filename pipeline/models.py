@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.rating.engine import HunterScore
 from core.risk.models import RiskResult
@@ -16,6 +16,7 @@ class ScorePrediction:
     expected_home_goals: float
     expected_away_goals: float
     text: str
+    alternatives: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -24,6 +25,7 @@ class ScorePrediction:
             "expected_home_goals": self.expected_home_goals,
             "expected_away_goals": self.expected_away_goals,
             "text": self.text,
+            "alternatives": self.alternatives,
         }
 
 

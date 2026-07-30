@@ -46,6 +46,15 @@ class FeatureBuilder:
             statistics = Statistics(fixture_id=fixture_id, provider=fixture.provider)
             warnings.append("statistics_unavailable")
 
+        stats_available = any(
+            value is not None
+            for value in [
+                statistics.home_shots,
+                statistics.away_shots,
+                statistics.home_shots_on_target,
+                statistics.away_shots_on_target,
+            ]
+        )
         home_shots = statistics.home_shots or 0
         away_shots = statistics.away_shots or 0
         home_target = statistics.home_shots_on_target or 0
@@ -60,23 +69,40 @@ class FeatureBuilder:
         home_odds = european.home if european else None
         away_odds = european.away if european else None
         market_heat = _market_heat(home_odds, away_odds)
-        odds_move = 52.0 if european else 0.0
+        odds_move = 52.0 if european else 50.0
         league_strength = 75.0 if fixture.league.id in {"eng.1", "esp.1", "ita.1", "ger.1"} else 62.0
 
+        if stats_available:
+            home_recent_form = _clip(52 + home_target * 4 - away_target * 2)
+            away_recent_form = _clip(52 + away_target * 4 - home_target * 2)
+            home_attack_index = _clip(50 + home_shots * 2 + home_target * 3)
+            away_attack_index = _clip(50 + away_shots * 2 + away_target * 3)
+            home_defense_index = _clip(58 - away_target * 5 - away_shots + away_red * 4)
+            away_defense_index = _clip(58 - home_target * 5 - home_shots + home_red * 4)
+            home_advantage = 58.0
+        else:
+            home_recent_form = 50.0
+            away_recent_form = 50.0
+            home_attack_index = 50.0
+            away_attack_index = 50.0
+            home_defense_index = 50.0
+            away_defense_index = 50.0
+            home_advantage = 56.0
+
         features = {
-            "home_recent_form": _clip(55 + home_target * 4 - away_target * 2),
-            "away_recent_form": _clip(50 + away_target * 3 - home_target),
-            "home_attack_index": _clip(48 + home_shots * 2 + home_target * 3),
-            "away_attack_index": _clip(45 + away_shots * 2 + away_target * 3),
-            "home_defense_index": _clip(65 - away_target * 5 - away_shots + away_red * 4),
-            "away_defense_index": _clip(60 - home_target * 5 - home_shots + home_red * 4),
-            "elo_difference": _clip(50 + (league_strength - 60) / 2 + (market_heat - 50) / 3),
+            "home_recent_form": home_recent_form,
+            "away_recent_form": away_recent_form,
+            "home_attack_index": home_attack_index,
+            "away_attack_index": away_attack_index,
+            "home_defense_index": home_defense_index,
+            "away_defense_index": away_defense_index,
+            "elo_difference": _clip(50 + (market_heat - 50) / 3),
             "odds_move": odds_move,
             "market_heat": market_heat,
             "fatigue_index": 22.0,
-            "home_advantage": 72.0,
+            "home_advantage": home_advantage,
             "injury_index": 5.0,
-            "live_momentum": _live_momentum(fixture.status, home_target, away_target),
+            "live_momentum": _live_momentum(fixture.status, home_target, away_target) if stats_available else 50.0,
             "league_strength": league_strength,
         }
         return FeatureVector(fixture_id=fixture_id, features=features, warnings=warnings)
@@ -103,7 +129,7 @@ class FeaturePipeline:
 
 def _market_heat(home_odds: float | None, away_odds: float | None) -> float:
     if home_odds is None or away_odds is None or home_odds <= 0 or away_odds <= 0:
-        return 45.0
+        return 50.0
     home_probability = (1 / home_odds) / ((1 / home_odds) + (1 / away_odds))
     return _clip(50 + (home_probability - 0.5) * 80)
 

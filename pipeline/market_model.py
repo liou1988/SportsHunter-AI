@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import floor
+from math import exp, factorial
 
 from datahub.models import Fixture, Odds, OddsMarket
 from features.models import FeatureVector
@@ -50,6 +50,8 @@ class MarketPredictionModel:
         market_edge = vector.get("market_heat") - 50
         momentum_edge = vector.get("live_momentum") - 50
         home_advantage = vector.get("home_advantage") - 50
+        fatigue_pressure = max(0.0, vector.get("fatigue_index") - 50)
+        injury_pressure = max(0.0, vector.get("injury_index") - 50)
 
         home_xg = 1.22
         home_xg += (vector.get("home_attack_index") - 50) * 0.018
@@ -59,8 +61,8 @@ class MarketPredictionModel:
         home_xg += home_form_edge * 0.005
         home_xg += market_edge * 0.006
         home_xg += momentum_edge * 0.008
-        home_xg -= vector.get("fatigue_index") * 0.003
-        home_xg -= vector.get("injury_index") * 0.004
+        home_xg -= fatigue_pressure * 0.003
+        home_xg -= injury_pressure * 0.004
 
         away_xg = 1.04
         away_xg += (vector.get("away_attack_index") - 50) * 0.018
@@ -69,39 +71,30 @@ class MarketPredictionModel:
         away_xg -= elo_edge * 0.008
         away_xg -= home_form_edge * 0.005
         away_xg -= momentum_edge * 0.006
-        away_xg -= vector.get("fatigue_index") * 0.002
-        away_xg -= vector.get("injury_index") * 0.002
+        away_xg -= fatigue_pressure * 0.002
+        away_xg -= injury_pressure * 0.002
 
         return ExpectedGoals(home=_clip(home_xg, 0.2, 4.5), away=_clip(away_xg, 0.2, 4.5))
 
     @staticmethod
     def _score_prediction(expected: ExpectedGoals) -> ScorePrediction:
-        home_goals = _goal_count(expected.home)
-        away_goals = _goal_count(expected.away)
-        if expected.margin >= 0.35 and home_goals <= away_goals:
-            home_goals = away_goals + 1
-        elif expected.margin <= -0.35 and away_goals <= home_goals:
-            away_goals = home_goals + 1
-        elif abs(expected.margin) < 0.18 and home_goals != away_goals:
-            lower = min(home_goals, away_goals)
-            home_goals = lower
-            away_goals = lower
-
-        home_goals = min(home_goals, 6)
-        away_goals = min(away_goals, 6)
+        home_goals, away_goals, alternatives = _most_likely_scores(expected)
+        primary_text = f"{home_goals}-{away_goals}"
+        display_scores = [primary_text, *alternatives[:2]]
         return ScorePrediction(
             home=home_goals,
             away=away_goals,
             expected_home_goals=expected.home,
             expected_away_goals=expected.away,
-            text=f"{home_goals}-{away_goals}",
+            text=" / ".join(display_scores),
+            alternatives=alternatives,
         )
 
     @staticmethod
     def _moneyline_pick(fixture: Fixture, margin: float) -> tuple[str, str | None]:
-        if margin >= 0.18:
+        if margin >= 0.28:
             return "HOME", fixture.home_team.name
-        if margin <= -0.18:
+        if margin <= -0.28:
             return "AWAY", fixture.away_team.name
         return "DRAW", None
 
@@ -254,8 +247,56 @@ class MarketPredictionModel:
         return notes
 
 
-def _goal_count(expected_goals: float) -> int:
-    return max(0, int(floor(expected_goals + 0.45)))
+def _most_likely_scores(expected: ExpectedGoals) -> tuple[int, int, list[str]]:
+    target_total = _target_total_goals(expected.total)
+    candidates: list[tuple[float, int, int]] = []
+    for home_goals in range(0, 6):
+        for away_goals in range(0, 6):
+            total = home_goals + away_goals
+            margin = home_goals - away_goals
+            probability = _poisson_probability(home_goals, expected.home) * _poisson_probability(away_goals, expected.away)
+            total_penalty = abs(total - target_total) * 0.012
+            margin_penalty = abs(margin - expected.margin) * 0.018
+            stale_bias_penalty = 0.006 if (home_goals, away_goals) == (2, 1) and expected.margin < 0.55 else 0.0
+            candidates.append((probability - total_penalty - margin_penalty - stale_bias_penalty, home_goals, away_goals))
+
+    ranked = sorted(
+        candidates,
+        key=lambda item: (item[0], -abs((item[1] - item[2]) - expected.margin), -item[1] - item[2]),
+        reverse=True,
+    )
+    _, home_goals, away_goals = ranked[0]
+    primary = (home_goals, away_goals)
+    alternatives: list[str] = []
+    for _, alt_home, alt_away in ranked[1:]:
+        if (alt_home, alt_away) == primary:
+            continue
+        if abs((alt_home + alt_away) - target_total) > 1:
+            continue
+        if abs((alt_home - alt_away) - expected.margin) > 2.0:
+            continue
+        text = f"{alt_home}-{alt_away}"
+        if text not in alternatives:
+            alternatives.append(text)
+        if len(alternatives) >= 2:
+            break
+    return home_goals, away_goals, alternatives
+
+
+def _target_total_goals(total_xg: float) -> int:
+    if total_xg < 1.75:
+        return 1
+    if total_xg < 2.25:
+        return 2
+    if total_xg < 2.85:
+        return 3
+    if total_xg < 3.55:
+        return 4
+    return 5
+
+
+def _poisson_probability(goals: int, expected_goals: float) -> float:
+    return exp(-expected_goals) * (expected_goals ** goals) / factorial(goals)
 
 
 def _handicap_line(abs_margin: float) -> float:

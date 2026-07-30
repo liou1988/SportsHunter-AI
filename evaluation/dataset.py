@@ -148,6 +148,9 @@ def _score_error(score_prediction: dict[str, Any], home_score: int | None, away_
 
 
 def _predicted_score_text(score_prediction: dict[str, Any]) -> str:
+    text = score_prediction.get("text")
+    if text:
+        return str(text)
     predicted_home = score_prediction.get("home")
     predicted_away = score_prediction.get("away")
     if predicted_home is None or predicted_away is None:
