@@ -628,9 +628,9 @@ function matchesRecommendationTimeFilter(kickoff) {
   const now = new Date();
   if (state.recommendationTimeFilter === "today") return beijingDateKey(date) === beijingDateKey(now);
   if (state.recommendationTimeFilter === "upcoming") return date.getTime() >= now.getTime();
-  if (state.recommendationTimeFilter === "next24h") {
+  if (state.recommendationTimeFilter === "next1h") {
     const diff = date.getTime() - now.getTime();
-    return diff >= 0 && diff <= 24 * 60 * 60 * 1000;
+    return diff >= 0 && diff <= 60 * 60 * 1000;
   }
   return true;
 }

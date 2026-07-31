@@ -331,10 +331,8 @@ class HistoryRepository:
         )
 
 
-_FINISHED_FIXTURE_STATUSES = {"finished", "postponed", "cancelled"}
-_CURRENT_FIXTURE_STATUSES = {"scheduled", "live", "unknown"}
-_RECOMMENDATION_START_GRACE = timedelta(minutes=15)
-_LIVE_FIXTURE_MAX_AGE = timedelta(hours=3)
+_PREDICTION_WINDOW = timedelta(hours=1)
+_PRE_MATCH_FIXTURE_STATUSES = {"scheduled", "unknown"}
 
 
 def _beijing_day_start_utc(now: datetime | None = None) -> datetime:
@@ -343,23 +341,22 @@ def _beijing_day_start_utc(now: datetime | None = None) -> datetime:
     return beijing_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
+def _fixture_status_value(fixture: orm.Fixture) -> str:
+    return str(getattr(fixture.status, "value", fixture.status or "unknown")).lower()
+
+
 def _is_current_recommendation_fixture(fixture: orm.Fixture | None, now: datetime | None = None) -> bool:
     if fixture is None:
         return False
     if fixture.result is not None:
         return False
-    status = str(fixture.status or "unknown").lower()
-    if status in _FINISHED_FIXTURE_STATUSES:
-        return False
-    if status not in _CURRENT_FIXTURE_STATUSES:
+    if _fixture_status_value(fixture) not in _PRE_MATCH_FIXTURE_STATUSES:
         return False
     start_time = _as_utc(fixture.start_time)
     if start_time is None:
         return False
     now = now or datetime.now(timezone.utc)
-    if status == "live":
-        return start_time >= now - _LIVE_FIXTURE_MAX_AGE
-    return start_time >= now - _RECOMMENDATION_START_GRACE
+    return now <= start_time <= now + _PREDICTION_WINDOW
 
 
 def _iso_utc(value: datetime | None) -> str | None:

@@ -525,6 +525,27 @@ def test_dashboard_latest_predictions_skip_stale_started_fixtures(mock_pipeline)
     assert items == []
 
 
+def test_dashboard_latest_predictions_skip_fixtures_more_than_one_hour_away(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+
+    with Session() as session:
+        prediction = session.scalar(select(Prediction))
+        assert prediction is not None
+        fixture = prediction.fixture
+        fixture.status = FixtureStatus.SCHEDULED.value
+        fixture.start_time = datetime.now(timezone.utc) + timedelta(hours=2)
+        session.commit()
+
+    with Session() as session:
+        items = DashboardRepository(session).latest_predictions()
+
+    assert items == []
+
+
 def test_archived_recommendations_show_latest_fixture_once(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -928,6 +949,8 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "recommendation-league-filter" in response.text
     assert "recommendation-time-filter" in response.text
     assert "recommendation-export-button" in response.text
+    assert "next1h" in response.text
+    assert "20260731-prematch1h" in response.text
     assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
@@ -1043,6 +1066,28 @@ def test_today_recommendations_skip_finished_fixtures() -> None:
 
     assert payload["count"] == 3
     assert all(item["fixture_status"] != FixtureStatus.FINISHED.value for item in payload["items"])
+
+
+def test_today_recommendations_only_include_one_hour_pre_match_window() -> None:
+    pipeline = _fake_recommendation_pipeline()
+    results = pipeline.run_today()
+    now = datetime.now(timezone.utc)
+    results[0].fixture.start_time = now + timedelta(minutes=30)
+    results[1].fixture.start_time = now + timedelta(minutes=61)
+    results[2].fixture.start_time = now - timedelta(minutes=1)
+    results[3].fixture.status = FixtureStatus.LIVE
+    results[3].fixture.start_time = now + timedelta(minutes=30)
+
+    class WindowAwarePipeline:
+        context = pipeline.context
+
+        def run_today(self) -> list:
+            return results
+
+    payload = build_today_recommendations(WindowAwarePipeline(), include_pass=True, archive=False)
+
+    assert payload["count"] == 1
+    assert payload["items"][0]["fixture_id"] == "buy"
 
 
 def test_recommendations_today_can_include_pass() -> None:
@@ -2000,7 +2045,7 @@ def _fake_recommendation_pipeline():
             league=league,
             home_team=home,
             away_team=away,
-            start_time=datetime.now(timezone.utc) + timedelta(hours=4),
+            start_time=datetime.now(timezone.utc) + timedelta(minutes=30),
             status=FixtureStatus.SCHEDULED,
             score=Score(),
             provider="mock",

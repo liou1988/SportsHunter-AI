@@ -131,27 +131,25 @@ def _export_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_FINISHED_FIXTURE_STATUSES = {"finished", "postponed", "cancelled"}
-_CURRENT_FIXTURE_STATUSES = {"scheduled", "live", "unknown"}
-_RECOMMENDATION_START_GRACE = timedelta(minutes=15)
-_LIVE_FIXTURE_MAX_AGE = timedelta(hours=3)
+_PREDICTION_WINDOW = timedelta(hours=1)
+_PRE_MATCH_FIXTURE_STATUSES = {"scheduled", "unknown"}
+
+
+def _fixture_status_value(fixture: Any) -> str:
+    raw_status = getattr(fixture, "status", "unknown") or "unknown"
+    return str(getattr(raw_status, "value", raw_status)).lower()
 
 
 def _is_current_fixture(fixture: Any, now: datetime | None = None) -> bool:
     if fixture is None:
         return False
-    status = str(getattr(fixture, "status", "unknown") or "unknown").lower()
-    if status in _FINISHED_FIXTURE_STATUSES:
-        return False
-    if status not in _CURRENT_FIXTURE_STATUSES:
+    if _fixture_status_value(fixture) not in _PRE_MATCH_FIXTURE_STATUSES:
         return False
     start_time = _as_utc(getattr(fixture, "start_time", None))
     if start_time is None:
         return False
     now = now or datetime.now(timezone.utc)
-    if status == "live":
-        return start_time >= now - _LIVE_FIXTURE_MAX_AGE
-    return start_time >= now - _RECOMMENDATION_START_GRACE
+    return now <= start_time <= now + _PREDICTION_WINDOW
 
 
 def _iso_utc(value: datetime | None) -> str | None:
