@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import csv
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from io import StringIO
 from typing import Any
 
@@ -131,7 +132,7 @@ def _export_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_PREDICTION_WINDOW = timedelta(hours=1)
+_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 _PRE_MATCH_FIXTURE_STATUSES = {"scheduled", "unknown"}
 
 
@@ -149,7 +150,11 @@ def _is_current_fixture(fixture: Any, now: datetime | None = None) -> bool:
     if start_time is None:
         return False
     now = now or datetime.now(timezone.utc)
-    return now <= start_time <= now + _PREDICTION_WINDOW
+    return start_time >= now and _is_beijing_today(start_time, now)
+
+
+def _is_beijing_today(start_time: datetime, now: datetime) -> bool:
+    return start_time.astimezone(_BEIJING_TZ).date() == now.astimezone(_BEIJING_TZ).date()
 
 
 def _iso_utc(value: datetime | None) -> str | None:

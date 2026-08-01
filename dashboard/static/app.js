@@ -626,12 +626,10 @@ function matchesRecommendationTimeFilter(kickoff) {
   const date = new Date(kickoff || 0);
   if (Number.isNaN(date.getTime())) return false;
   const now = new Date();
-  if (state.recommendationTimeFilter === "today") return beijingDateKey(date) === beijingDateKey(now);
-  if (state.recommendationTimeFilter === "upcoming") return date.getTime() >= now.getTime();
-  if (state.recommendationTimeFilter === "next1h") {
-    const diff = date.getTime() - now.getTime();
-    return diff >= 0 && diff <= 60 * 60 * 1000;
+  if (state.recommendationTimeFilter === "today" || state.recommendationTimeFilter === "beijingToday") {
+    return beijingDateKey(date) === beijingDateKey(now);
   }
+  if (state.recommendationTimeFilter === "upcoming") return date.getTime() >= now.getTime();
   return true;
 }
 

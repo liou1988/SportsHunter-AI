@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -311,6 +312,8 @@ def test_prediction_archive_reuses_unchanged_snapshot(mock_pipeline) -> None:
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = _future_beijing_today_start()
+    result.fixture.status = FixtureStatus.SCHEDULED
     archive = PredictionArchive(session_factory=Session)
 
     first = archive.save_if_changed(result)
@@ -428,6 +431,8 @@ def test_archived_recommendations_read_from_prediction_archive(mock_pipeline) ->
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = _future_beijing_today_start()
+    result.fixture.status = FixtureStatus.SCHEDULED
     PredictionArchive(session_factory=Session).save_if_changed(result)
 
     payload = build_archived_recommendations(include_pass=True, session_factory=Session)
@@ -525,7 +530,7 @@ def test_dashboard_latest_predictions_skip_stale_started_fixtures(mock_pipeline)
     assert items == []
 
 
-def test_dashboard_latest_predictions_skip_fixtures_more_than_one_hour_away(mock_pipeline) -> None:
+def test_dashboard_latest_predictions_skip_fixtures_after_beijing_today(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
@@ -537,7 +542,7 @@ def test_dashboard_latest_predictions_skip_fixtures_more_than_one_hour_away(mock
         assert prediction is not None
         fixture = prediction.fixture
         fixture.status = FixtureStatus.SCHEDULED.value
-        fixture.start_time = datetime.now(timezone.utc) + timedelta(hours=2)
+        fixture.start_time = _tomorrow_beijing_start()
         session.commit()
 
     with Session() as session:
@@ -551,6 +556,8 @@ def test_archived_recommendations_show_latest_fixture_once(mock_pipeline) -> Non
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = _future_beijing_today_start()
+    result.fixture.status = FixtureStatus.SCHEDULED
     archive = PredictionArchive(session_factory=Session)
     first_id = archive.save(result)
     second_id = archive.save(result)
@@ -567,6 +574,8 @@ def test_dashboard_latest_predictions_show_fixture_once(mock_pipeline) -> None:
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = _future_beijing_today_start()
+    result.fixture.status = FixtureStatus.SCHEDULED
     archive = PredictionArchive(session_factory=Session)
     archive.save(result)
     latest_id = archive.save(result)
@@ -582,6 +591,8 @@ def test_recommendations_export_csv_contains_prediction_fields(mock_pipeline) ->
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = _future_beijing_today_start()
+    result.fixture.status = FixtureStatus.SCHEDULED
     PredictionArchive(session_factory=Session).save_if_changed(result)
 
     csv_body = build_recommendations_export_csv(include_pass=True, session_factory=Session)
@@ -949,8 +960,8 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "recommendation-league-filter" in response.text
     assert "recommendation-time-filter" in response.text
     assert "recommendation-export-button" in response.text
-    assert "next1h" in response.text
-    assert "20260731-prematch1h" in response.text
+    assert "beijingToday" in response.text
+    assert "20260801-beijingtoday" in response.text
     assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
@@ -968,6 +979,8 @@ def test_dashboard_latest_predictions_include_kickoff(mock_pipeline) -> None:
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True)
     result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = _future_beijing_today_start()
+    result.fixture.status = FixtureStatus.SCHEDULED
     PredictionArchive(session_factory=Session).save_if_changed(result)
 
     with Session() as session:
@@ -1068,15 +1081,15 @@ def test_today_recommendations_skip_finished_fixtures() -> None:
     assert all(item["fixture_status"] != FixtureStatus.FINISHED.value for item in payload["items"])
 
 
-def test_today_recommendations_only_include_one_hour_pre_match_window() -> None:
+def test_today_recommendations_only_include_beijing_today_upcoming() -> None:
     pipeline = _fake_recommendation_pipeline()
     results = pipeline.run_today()
     now = datetime.now(timezone.utc)
-    results[0].fixture.start_time = now + timedelta(minutes=30)
-    results[1].fixture.start_time = now + timedelta(minutes=61)
+    results[0].fixture.start_time = _future_beijing_today_start()
+    results[1].fixture.start_time = _tomorrow_beijing_start()
     results[2].fixture.start_time = now - timedelta(minutes=1)
     results[3].fixture.status = FixtureStatus.LIVE
-    results[3].fixture.start_time = now + timedelta(minutes=30)
+    results[3].fixture.start_time = _future_beijing_today_start()
 
     class WindowAwarePipeline:
         context = pipeline.context
@@ -1574,7 +1587,7 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260730-ux3" in template
+    assert "20260801-beijingtoday" in template
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))
@@ -2034,6 +2047,23 @@ def _thesportsdb_live_payload() -> dict:
     }
 
 
+def _future_beijing_today_start() -> datetime:
+    now_utc = datetime.now(timezone.utc)
+    beijing_now = now_utc.astimezone(ZoneInfo("Asia/Shanghai"))
+    start = beijing_now + timedelta(minutes=30)
+    if start.date() != beijing_now.date():
+        start = beijing_now.replace(hour=23, minute=59, second=30, microsecond=0)
+    if start <= beijing_now:
+        start = beijing_now + timedelta(seconds=1)
+    return start.astimezone(timezone.utc)
+
+
+def _tomorrow_beijing_start() -> datetime:
+    beijing_now = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Shanghai"))
+    tomorrow = (beijing_now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    return tomorrow.astimezone(timezone.utc)
+
+
 def _fake_recommendation_pipeline():
     league = League(id="debug-league", name="Debug League", provider="mock")
     home = Team(id="home", name="Debug Home", provider="mock")
@@ -2045,7 +2075,7 @@ def _fake_recommendation_pipeline():
             league=league,
             home_team=home,
             away_team=away,
-            start_time=datetime.now(timezone.utc) + timedelta(minutes=30),
+            start_time=_future_beijing_today_start(),
             status=FixtureStatus.SCHEDULED,
             score=Score(),
             provider="mock",

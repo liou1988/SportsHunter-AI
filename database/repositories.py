@@ -331,7 +331,7 @@ class HistoryRepository:
         )
 
 
-_PREDICTION_WINDOW = timedelta(hours=1)
+_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 _PRE_MATCH_FIXTURE_STATUSES = {"scheduled", "unknown"}
 
 
@@ -356,7 +356,11 @@ def _is_current_recommendation_fixture(fixture: orm.Fixture | None, now: datetim
     if start_time is None:
         return False
     now = now or datetime.now(timezone.utc)
-    return now <= start_time <= now + _PREDICTION_WINDOW
+    return start_time >= now and _is_beijing_today(start_time, now)
+
+
+def _is_beijing_today(start_time: datetime, now: datetime) -> bool:
+    return start_time.astimezone(_BEIJING_TZ).date() == now.astimezone(_BEIJING_TZ).date()
 
 
 def _iso_utc(value: datetime | None) -> str | None:
