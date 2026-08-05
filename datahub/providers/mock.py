@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from config.settings import Settings
 from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Statistics, Team, to_plain_dict
@@ -16,13 +17,23 @@ class MockProvider(BaseProvider):
         self.home = Team(id="mock-home", name="North City", abbreviation="NOR", provider=self.name)
         self.away = Team(id="mock-away", name="South United", abbreviation="SOU", provider=self.name)
 
+    def _future_today_start(self) -> datetime:
+        now_utc = datetime.now(timezone.utc)
+        beijing_now = now_utc.astimezone(ZoneInfo("Asia/Shanghai"))
+        start = beijing_now + timedelta(hours=5)
+        if start.date() != beijing_now.date():
+            start = beijing_now.replace(hour=23, minute=59, second=30, microsecond=0)
+        if start <= beijing_now:
+            start = beijing_now + timedelta(seconds=1)
+        return start.astimezone(timezone.utc)
+
     def _fixture(self, fixture_id: str = "mock-001") -> Fixture:
         return Fixture(
             id=fixture_id,
             league=self.league,
             home_team=self.home,
             away_team=self.away,
-            start_time=datetime.now(timezone.utc) + timedelta(hours=5),
+            start_time=self._future_today_start(),
             status=FixtureStatus.SCHEDULED,
             venue="Hunter Arena",
             season=self.settings.football_data_season,

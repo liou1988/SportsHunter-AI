@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pipeline.context import PipelineContext, build_pipeline_context
+from pipeline.filters import prediction_candidate_fixtures
 from pipeline.models import PredictionResult
 
 
@@ -8,8 +11,14 @@ class PredictionPipeline:
     def __init__(self, context: PipelineContext | None = None) -> None:
         self.context = context or build_pipeline_context()
 
-    def run_today(self) -> list[PredictionResult]:
-        return [self.run_fixture(fixture.id) for fixture in self.context.datahub.get_today_fixtures()]
+    def run_today(self, now: datetime | None = None) -> list[PredictionResult]:
+        today_fixtures = self.context.datahub.get_today_fixtures()
+        try:
+            live_fixtures = self.context.datahub.get_live_matches()
+        except Exception:  # noqa: BLE001 - today predictions should survive live-feed outages
+            live_fixtures = []
+        fixtures = prediction_candidate_fixtures(today_fixtures, live_fixtures, now=now)
+        return [self.run_fixture(fixture.id) for fixture in fixtures]
 
     def run_fixture(self, fixture_id: str) -> PredictionResult:
         fixture = self.context.datahub.get_fixture(fixture_id)

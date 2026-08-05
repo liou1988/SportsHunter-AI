@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 import csv
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 from io import StringIO
 from typing import Any
 
@@ -13,6 +12,7 @@ from database.repositories import SportsRepository
 from database.session import SessionLocal
 from datahub.models import OddsMarket, to_plain_dict
 from pipeline.archive import ArchiveBatchResult, PredictionArchive
+from pipeline.filters import is_prediction_candidate_fixture
 from pipeline.models import PredictionResult
 
 from telegram_bot.localization import translate_fixture_status, translate_league_name, translate_match_text, translate_signal, translate_team_name
@@ -132,29 +132,8 @@ def _export_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-_PRE_MATCH_FIXTURE_STATUSES = {"scheduled", "unknown"}
-
-
-def _fixture_status_value(fixture: Any) -> str:
-    raw_status = getattr(fixture, "status", "unknown") or "unknown"
-    return str(getattr(raw_status, "value", raw_status)).lower()
-
-
 def _is_current_fixture(fixture: Any, now: datetime | None = None) -> bool:
-    if fixture is None:
-        return False
-    if _fixture_status_value(fixture) not in _PRE_MATCH_FIXTURE_STATUSES:
-        return False
-    start_time = _as_utc(getattr(fixture, "start_time", None))
-    if start_time is None:
-        return False
-    now = now or datetime.now(timezone.utc)
-    return start_time >= now and _is_beijing_today(start_time, now)
-
-
-def _is_beijing_today(start_time: datetime, now: datetime) -> bool:
-    return start_time.astimezone(_BEIJING_TZ).date() == now.astimezone(_BEIJING_TZ).date()
+    return is_prediction_candidate_fixture(fixture, now)
 
 
 def _iso_utc(value: datetime | None) -> str | None:

@@ -38,6 +38,7 @@ from optimizer.engine import ModelOptimizer
 from optimizer import scheduler as optimizer_scheduler
 from optimizer.weights import load_active_rating_weights
 from pipeline.archive import PredictionArchive
+from pipeline.runner import PredictionPipeline
 from pipeline.market_model import MarketPredictionModel
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
@@ -321,6 +322,51 @@ def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     assert result.market_prediction.total_goals.market_available is True
     assert result.market_prediction.handicap.market_available is True
     assert result.to_dict()["market_prediction"]["score"]["text"] == result.market_prediction.score.text
+
+
+def test_prediction_pipeline_only_runs_today_upcoming_or_live_candidates() -> None:
+    now = datetime(2026, 8, 5, 4, 0, tzinfo=timezone.utc)
+    league = League(id="league", name="League", provider="mock")
+    home = Team(id="home", name="Home", provider="mock")
+    away = Team(id="away", name="Away", provider="mock")
+
+    def fixture(fixture_id: str, start_time: datetime, status: FixtureStatus) -> Fixture:
+        return Fixture(
+            id=fixture_id,
+            league=league,
+            home_team=home,
+            away_team=away,
+            start_time=start_time,
+            status=status,
+            provider="mock",
+        )
+
+    class FakeDataHub:
+        def get_today_fixtures(self) -> list[Fixture]:
+            return [
+                fixture("today-upcoming", now + timedelta(minutes=30), FixtureStatus.SCHEDULED),
+                fixture("tomorrow", now + timedelta(days=1), FixtureStatus.SCHEDULED),
+                fixture("already-started", now - timedelta(minutes=5), FixtureStatus.SCHEDULED),
+                fixture("finished", now + timedelta(minutes=15), FixtureStatus.FINISHED),
+            ]
+
+        def get_live_matches(self) -> list[Fixture]:
+            return [
+                fixture("live-recent", now - timedelta(minutes=45), FixtureStatus.LIVE),
+                fixture("live-stale", now - timedelta(hours=4), FixtureStatus.LIVE),
+            ]
+
+    pipeline = PredictionPipeline(SimpleNamespace(datahub=FakeDataHub()))
+    called: list[str] = []
+
+    def fake_run_fixture(fixture_id: str) -> str:
+        called.append(fixture_id)
+        return fixture_id
+
+    pipeline.run_fixture = fake_run_fixture
+
+    assert pipeline.run_today(now=now) == ["today-upcoming", "live-recent"]
+    assert called == ["today-upcoming", "live-recent"]
 
 
 def test_data_sync_commits_successful_fixtures_and_rolls_back_failed_one(monkeypatch) -> None:
@@ -1182,7 +1228,7 @@ def test_today_recommendations_skip_finished_fixtures() -> None:
     assert all(item["fixture_status"] != FixtureStatus.FINISHED.value for item in payload["items"])
 
 
-def test_today_recommendations_only_include_beijing_today_upcoming() -> None:
+def test_today_recommendations_only_include_beijing_today_upcoming_or_live() -> None:
     pipeline = _fake_recommendation_pipeline()
     results = pipeline.run_today()
     now = datetime.now(timezone.utc)
@@ -1190,7 +1236,7 @@ def test_today_recommendations_only_include_beijing_today_upcoming() -> None:
     results[1].fixture.start_time = _tomorrow_beijing_start()
     results[2].fixture.start_time = now - timedelta(minutes=1)
     results[3].fixture.status = FixtureStatus.LIVE
-    results[3].fixture.start_time = _future_beijing_today_start()
+    results[3].fixture.start_time = _recent_beijing_today_start()
 
     class WindowAwarePipeline:
         context = pipeline.context
@@ -1200,8 +1246,8 @@ def test_today_recommendations_only_include_beijing_today_upcoming() -> None:
 
     payload = build_today_recommendations(WindowAwarePipeline(), include_pass=True, archive=False)
 
-    assert payload["count"] == 1
-    assert payload["items"][0]["fixture_id"] == "buy"
+    assert payload["count"] == 2
+    assert [item["fixture_id"] for item in payload["items"]] == ["strong", "buy"]
 
 
 def test_recommendations_today_can_include_pass() -> None:
@@ -2163,6 +2209,15 @@ def _tomorrow_beijing_start() -> datetime:
     beijing_now = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Shanghai"))
     tomorrow = (beijing_now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     return tomorrow.astimezone(timezone.utc)
+
+
+def _recent_beijing_today_start(minutes: int = 20) -> datetime:
+    now_utc = datetime.now(timezone.utc)
+    beijing_now = now_utc.astimezone(ZoneInfo("Asia/Shanghai"))
+    start = beijing_now - timedelta(minutes=minutes)
+    if start.date() != beijing_now.date():
+        start = beijing_now.replace(hour=0, minute=0, second=1, microsecond=0)
+    return start.astimezone(timezone.utc)
 
 
 def _fake_recommendation_pipeline():

@@ -78,6 +78,8 @@ Provider diagnostics:
 Telegram recommendations are event-style alerts now: SportsHunter-AI checks the
 prediction pipeline every few minutes and sends a message only when a new
 qualified match appears. There is no fixed daily recommendation push.
+The prediction pipeline only evaluates Beijing-today fixtures that have not
+started yet, plus live matches that started within the last three hours.
 Alert messages include the recommended side, predicted score, totals pick, and
 Asian handicap lean from the rule-based market prediction model.
 When the free ESPN feed exposes totals or spread markets, the model compares

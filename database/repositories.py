@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from database import models as orm
 from datahub import models as hub
+from pipeline.filters import is_prediction_candidate_fixture
 
 
 class SportsRepository:
@@ -331,18 +332,10 @@ class HistoryRepository:
         )
 
 
-_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-_PRE_MATCH_FIXTURE_STATUSES = {"scheduled", "unknown"}
-
-
 def _beijing_day_start_utc(now: datetime | None = None) -> datetime:
     now = now or datetime.now(timezone.utc)
     beijing_now = now.astimezone(ZoneInfo("Asia/Shanghai"))
     return beijing_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-
-
-def _fixture_status_value(fixture: orm.Fixture) -> str:
-    return str(getattr(fixture.status, "value", fixture.status or "unknown")).lower()
 
 
 def _is_current_recommendation_fixture(fixture: orm.Fixture | None, now: datetime | None = None) -> bool:
@@ -350,17 +343,7 @@ def _is_current_recommendation_fixture(fixture: orm.Fixture | None, now: datetim
         return False
     if fixture.result is not None:
         return False
-    if _fixture_status_value(fixture) not in _PRE_MATCH_FIXTURE_STATUSES:
-        return False
-    start_time = _as_utc(fixture.start_time)
-    if start_time is None:
-        return False
-    now = now or datetime.now(timezone.utc)
-    return start_time >= now and _is_beijing_today(start_time, now)
-
-
-def _is_beijing_today(start_time: datetime, now: datetime) -> bool:
-    return start_time.astimezone(_BEIJING_TZ).date() == now.astimezone(_BEIJING_TZ).date()
+    return is_prediction_candidate_fixture(fixture, now)
 
 
 def _iso_utc(value: datetime | None) -> str | None:

@@ -23,6 +23,9 @@ Useful endpoints:
 
 Prediction/evaluation loop:
 
+- Prediction runs are scoped to Beijing-today upcoming fixtures and live matches
+  that started within the last three hours; tomorrow, finished, cancelled,
+  postponed and stale live fixtures are skipped before scoring.
 - Today recommendations are archived to `predictions` with deduped snapshots.
 - Successful Telegram alerts also archive the delivered prediction snapshot.
 - Finished fixtures are settled to `match_results` by the post-match collector.

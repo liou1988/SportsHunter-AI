@@ -13,6 +13,8 @@ The scheduler registers the Beta v1 operating cycle:
 Telegram recommendations are no longer pushed as a fixed 08:00 batch. The
 alert job evaluates the current prediction pipeline and sends only new
 `STRONG_BUY` / `BUY` / `WATCH` matches that have not been pushed before.
+Prediction jobs only score Beijing-today upcoming fixtures and live matches
+that started within the last three hours.
 
 Provider, scheduler, database, prediction and evaluation status are exposed
 through the health modules and provider status API.
