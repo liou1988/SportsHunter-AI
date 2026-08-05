@@ -260,6 +260,13 @@ class Settings(BaseSettings):
     free_provider_base_url: str = "https://site.api.espn.com"
     free_provider_thesportsdb_base_url: str = "https://www.thesportsdb.com/api/v1/json/3"
     free_provider_football_leagues: list[str] = Field(default_factory=lambda: DEFAULT_FREE_FOOTBALL_LEAGUES.copy())
+    odds_aggregator_enabled: bool = False
+    odds_aggregator_provider: str = "the_odds_api"
+    the_odds_api_key: str | None = None
+    the_odds_api_base_url: str = "https://api.the-odds-api.com"
+    the_odds_api_regions: list[str] = Field(default_factory=lambda: ["uk", "eu"])
+    the_odds_api_bookmakers: list[str] = Field(default_factory=list)
+    the_odds_api_markets: list[str] = Field(default_factory=lambda: ["h2h", "spreads", "totals"])
 
     provider_timeout_seconds: float = 10.0
     provider_retry_attempts: int = 3
@@ -329,7 +336,16 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
-    @field_validator("enabled_sports", "free_provider_sources", "free_provider_football_leagues", "telegram_alert_signals", mode="before")
+    @field_validator(
+        "enabled_sports",
+        "free_provider_sources",
+        "free_provider_football_leagues",
+        "the_odds_api_regions",
+        "the_odds_api_bookmakers",
+        "the_odds_api_markets",
+        "telegram_alert_signals",
+        mode="before",
+    )
     @classmethod
     def parse_csv_list(cls, value: Any) -> list[str]:
         if value is None or value == "":
@@ -338,7 +354,14 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return list(value)
 
-    @field_validator("bot_token", "chat_id", "telegram_bot_token", "telegram_chat_id", mode="before")
+    @field_validator(
+        "bot_token",
+        "chat_id",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "the_odds_api_key",
+        mode="before",
+    )
     @classmethod
     def empty_string_to_none(cls, value: Any) -> Any:
         if value == "":

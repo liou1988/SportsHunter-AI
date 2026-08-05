@@ -148,6 +148,18 @@ def test_settings_parse_free_provider_sources(monkeypatch) -> None:
     assert settings.free_provider_sources == ["espn", "thesportsdb"]
 
 
+def test_settings_parse_odds_aggregator_config(monkeypatch) -> None:
+    monkeypatch.setenv("ODDS_AGGREGATOR_ENABLED", "true")
+    monkeypatch.setenv("THE_ODDS_API_KEY", "test-key")
+    monkeypatch.setenv("THE_ODDS_API_REGIONS", "uk,eu")
+    monkeypatch.setenv("THE_ODDS_API_BOOKMAKERS", "pinnacle,betfair_ex_uk")
+    settings = Settings(_env_file=None)
+    assert settings.odds_aggregator_enabled is True
+    assert settings.the_odds_api_key == "test-key"
+    assert settings.the_odds_api_regions == ["uk", "eu"]
+    assert settings.the_odds_api_bookmakers == ["pinnacle", "betfair_ex_uk"]
+
+
 def test_settings_parse_telegram_alert_signals(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_ALERT_SIGNALS", "STRONG_BUY,BUY,WATCH")
     settings = Settings(_env_file=None)
@@ -240,6 +252,11 @@ def test_docker_compose_allows_telegram_env_override() -> None:
 
 def test_env_example_contains_triggered_alert_settings() -> None:
     text = Path(".env.example").read_text(encoding="utf-8")
+    assert "ODDS_AGGREGATOR_ENABLED=false" in text
+    assert "ODDS_AGGREGATOR_PROVIDER=the_odds_api" in text
+    assert "THE_ODDS_API_KEY=" in text
+    assert "THE_ODDS_API_REGIONS=uk,eu" in text
+    assert "THE_ODDS_API_MARKETS=h2h,spreads,totals" in text
     assert "TELEGRAM_ALERT_SIGNALS=STRONG_BUY,BUY,WATCH" in text
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES=5" in text
     assert "TELEGRAM_ALERT_RETENTION_DAYS=7" in text
@@ -258,6 +275,11 @@ def test_docker_compose_allows_free_provider_leagues_env_override() -> None:
     assert "FREE_PROVIDER_SOURCES: ${FREE_PROVIDER_SOURCES:-espn,thesportsdb}" in text
     assert "FREE_PROVIDER_THESPORTSDB_BASE_URL: ${FREE_PROVIDER_THESPORTSDB_BASE_URL:-https://www.thesportsdb.com/api/v1/json/3}" in text
     assert "FREE_PROVIDER_FOOTBALL_LEAGUES: ${FREE_PROVIDER_FOOTBALL_LEAGUES:-" in text
+    assert "ODDS_AGGREGATOR_ENABLED: ${ODDS_AGGREGATOR_ENABLED:-false}" in text
+    assert "ODDS_AGGREGATOR_PROVIDER: ${ODDS_AGGREGATOR_PROVIDER:-the_odds_api}" in text
+    assert "THE_ODDS_API_KEY: ${THE_ODDS_API_KEY:-}" in text
+    assert "THE_ODDS_API_REGIONS: ${THE_ODDS_API_REGIONS:-uk,eu}" in text
+    assert "THE_ODDS_API_MARKETS: ${THE_ODDS_API_MARKETS:-h2h,spreads,totals}" in text
     for league_id in [
         "kor.1",
         "kor.2",
@@ -2107,6 +2129,58 @@ def test_free_provider_odds_parses_totals_and_handicap() -> None:
     assert odds[2].away == 100
 
 
+def test_free_provider_prepends_the_odds_api_bookmaker_odds() -> None:
+    captured_params: dict[str, str] = {}
+
+    class FakeJsonClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            if path.endswith("/summary"):
+                return _summary_odds_payload()
+            return _scoreboard_payload("eng.1", ["odds-1"])
+
+    class FakeOddsApiClient:
+        def get_json(self, path: str, params: dict | None = None) -> list[dict]:
+            captured_params.update(params or {})
+            assert path == "/v4/sports/soccer_epl/odds"
+            return _the_odds_api_payload()
+
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["espn"],
+        free_provider_football_leagues=["eng.1"],
+        odds_aggregator_enabled=True,
+        the_odds_api_key="test-key",
+        the_odds_api_regions=["uk", "eu"],
+        _env_file=None,
+    )
+    provider = FreeFootballProvider(settings)
+    provider.client = FakeJsonClient()
+    assert provider.odds_aggregator is not None
+    provider.odds_aggregator.client = FakeOddsApiClient()
+
+    odds = provider.get_odds("odds-1")
+
+    assert [item.market for item in odds[:3]] == [
+        OddsMarket.EUROPEAN,
+        OddsMarket.TOTALS,
+        OddsMarket.ASIAN_HANDICAP,
+    ]
+    assert all(item.provider == "the_odds_api" for item in odds[:3])
+    assert odds[0].bookmaker == "Pinnacle"
+    assert odds[0].home == 1.83
+    assert odds[0].draw == 3.55
+    assert odds[0].away == 4.4
+    assert odds[1].line == 2.75
+    assert odds[1].over == 1.95
+    assert odds[1].under == 1.9
+    assert odds[2].line == -0.25
+    assert odds[2].home == 2.0
+    assert odds[2].away == 1.85
+    assert odds[3].provider == "free"
+    assert captured_params["markets"] == "h2h,spreads,totals"
+    assert captured_params["regions"] == "uk,eu"
+
+
 def test_free_provider_today_aggregates_supplemental_sources_and_deduplicates() -> None:
     class FakeEspnClient:
         def get_json(self, path: str, params: dict | None = None) -> dict:
@@ -2294,6 +2368,49 @@ def _summary_odds_payload() -> dict:
             }
         ]
     }
+
+
+def _the_odds_api_payload() -> list[dict]:
+    return [
+        {
+            "id": "odds-api-1",
+            "sport_key": "soccer_epl",
+            "commence_time": "2026-07-26T12:00:00Z",
+            "home_team": "eng.1 Home odds-1",
+            "away_team": "eng.1 Away odds-1",
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "title": "Pinnacle",
+                    "last_update": "2026-07-26T11:55:00Z",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "eng.1 Home odds-1", "price": 1.83},
+                                {"name": "Draw", "price": 3.55},
+                                {"name": "eng.1 Away odds-1", "price": 4.40},
+                            ],
+                        },
+                        {
+                            "key": "totals",
+                            "outcomes": [
+                                {"name": "Over", "price": 1.95, "point": 2.75},
+                                {"name": "Under", "price": 1.90, "point": 2.75},
+                            ],
+                        },
+                        {
+                            "key": "spreads",
+                            "outcomes": [
+                                {"name": "eng.1 Home odds-1", "price": 2.00, "point": -0.25},
+                                {"name": "eng.1 Away odds-1", "price": 1.85, "point": 0.25},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+    ]
 
 
 def _thesportsdb_events_payload(overrides: list[dict] | None = None) -> dict:

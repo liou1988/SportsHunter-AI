@@ -23,6 +23,7 @@ from datahub.models import (
     Team,
     to_plain_dict,
 )
+from datahub.odds_aggregator import build_odds_aggregator
 from datahub.provider import BaseProvider, ProviderUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,11 @@ class FreeFootballProvider(BaseProvider):
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
         self.client = HttpJsonClient(settings, settings.free_provider_base_url)
-        self.thesportsdb_client = HttpJsonClient(settings, settings.free_provider_thesportsdb_base_url)
+        self.thesportsdb_client = HttpJsonClient(
+            settings,
+            settings.free_provider_thesportsdb_base_url,
+        )
+        self.odds_aggregator = build_odds_aggregator(settings)
 
     def get_today_fixtures(self) -> list[Fixture]:
         return self.cached("free:today", self._get_today_fixtures, ttl_seconds=120)
@@ -371,8 +376,35 @@ class FreeFootballProvider(BaseProvider):
 
     def get_odds(self, fixture_id: str) -> list[Odds]:
         fixture = self.get_fixture(fixture_id)
+        aggregated_odds = self._aggregated_odds(fixture)
         if self._fixture_source(fixture) == THESPORTSDB_SOURCE:
+            return aggregated_odds
+        try:
+            espn_odds = self._get_espn_odds(fixture)
+        except Exception:
+            if aggregated_odds:
+                return aggregated_odds
+            raise
+        return _dedupe_odds([*aggregated_odds, *espn_odds])
+
+    def _aggregated_odds(self, fixture: Fixture) -> list[Odds]:
+        if self.odds_aggregator is None:
             return []
+        try:
+            return self.odds_aggregator.get_odds(fixture)
+        except Exception as exc:  # noqa: BLE001 - external odds are supplemental
+            logger.warning(
+                "odds aggregator failed",
+                extra={
+                    "fixture_id": fixture.id,
+                    "provider": getattr(self.odds_aggregator, "name", "unknown"),
+                },
+                exc_info=exc,
+            )
+            return []
+
+    def _get_espn_odds(self, fixture: Fixture) -> list[Odds]:
+        fixture_id = fixture.id
         league_id = fixture.league.id
         payload = self.retry(
             f"summary-odds:{fixture_id}",
@@ -953,3 +985,15 @@ class FreeFootballProvider(BaseProvider):
     def _safe_int(cls, value: object) -> int | None:
         parsed = cls._safe_float(value)
         return None if parsed is None else int(parsed)
+
+
+def _dedupe_odds(odds_items: list[Odds]) -> list[Odds]:
+    deduped: list[Odds] = []
+    seen: set[tuple[str, str, str, float | None]] = set()
+    for odds in odds_items:
+        key = (odds.provider, odds.bookmaker, odds.market.value, odds.line)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(odds)
+    return deduped
