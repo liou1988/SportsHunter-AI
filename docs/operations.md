@@ -26,6 +26,10 @@ Prediction/evaluation loop:
 - Prediction runs are scoped to Beijing-today upcoming fixtures and live matches
   that started within the last three hours; tomorrow, finished, cancelled,
   postponed and stale live fixtures are skipped before scoring.
+- Market projections first use settled `match_results` to build a time-weighted
+  historical Poisson model for 1X2, scoreline, totals and Asian handicap edges.
+  If the provider/league sample is too small, prediction falls back to the
+  rule-based expected-goals model.
 - Today recommendations are archived to `predictions` with deduped snapshots.
 - Successful Telegram alerts also archive the delivered prediction snapshot.
 - Finished fixtures are settled to `match_results` by the post-match collector.

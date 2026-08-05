@@ -41,6 +41,12 @@ from pipeline.archive import PredictionArchive
 from pipeline.runner import PredictionPipeline
 from pipeline.market_model import MarketPredictionModel
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
+from pipeline.probability import (
+    HistoricalProbabilityModel,
+    OutcomeProbabilities,
+    ProbabilityProjection,
+    ScoreProbability,
+)
 from free_provider.football import FreeFootballProvider, LEAGUE_NAMES
 from features.models import FeatureVector
 from features.pipeline import FeatureBuilder
@@ -550,6 +556,149 @@ def test_market_prediction_scoreline_varies_with_match_profile() -> None:
     assert away_strong[1:] == ("AWAY", "Away")
     assert len({neutral[0], home_strong[0], away_strong[0], low_total[0], high_total[0]}) >= 4
     assert not all(item == "2-1" for item in [neutral[0], home_strong[0], away_strong[0], low_total[0], high_total[0]])
+
+
+def test_historical_probability_model_uses_settled_results() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    league = League(id="league", name="Debug League", provider="mock")
+    home = Team(id="home", name="Home", provider="mock")
+    away = Team(id="away", name="Away", provider="mock")
+    scores = [(3, 1), (2, 0), (2, 1), (3, 2), (1, 0), (2, 1)]
+
+    with Session() as session:
+        repo = SportsRepository(session)
+        for index, (home_score, away_score) in enumerate(scores, start=1):
+            historical_fixture = Fixture(
+                id=f"history-{index}",
+                league=league,
+                home_team=home,
+                away_team=away,
+                start_time=now - timedelta(days=index * 7),
+                status=FixtureStatus.FINISHED,
+                provider="mock",
+            )
+            db_fixture = repo.upsert_fixture(historical_fixture)
+            repo.upsert_match_result(db_fixture, home_score=home_score, away_score=away_score)
+        session.commit()
+
+    upcoming = Fixture(
+        id="future",
+        league=league,
+        home_team=home,
+        away_team=away,
+        start_time=now,
+        status=FixtureStatus.SCHEDULED,
+        provider="mock",
+    )
+    projection = HistoricalProbabilityModel(
+        session_factory=Session,
+        min_league_matches=4,
+    ).predict(upcoming)
+
+    assert projection is not None
+    assert projection.source == "historical_league_poisson"
+    assert projection.sample_count == len(scores)
+    assert projection.home_team_sample_count == len(scores)
+    assert projection.away_team_sample_count == len(scores)
+    assert projection.expected_home_goals > projection.expected_away_goals
+    assert projection.outcomes.home > projection.outcomes.away
+    assert projection.total_goals_probability(2.25, "OVER").win > 0
+    assert projection.handicap_probability("home", -0.25).effective > 0.5
+
+
+def test_market_prediction_uses_probability_projection_for_edges_and_ev() -> None:
+    fixture = Fixture(
+        id="probability-market",
+        league=League(id="league", name="Debug League", provider="mock"),
+        home_team=Team(id="home", name="Home", provider="mock"),
+        away_team=Team(id="away", name="Away", provider="mock"),
+        start_time=datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc),
+        provider="mock",
+    )
+    projection = ProbabilityProjection(
+        source="historical_league_poisson",
+        sample_count=20,
+        league_sample_count=20,
+        home_team_sample_count=8,
+        away_team_sample_count=8,
+        expected_home_goals=0.9,
+        expected_away_goals=1.7,
+        outcomes=OutcomeProbabilities(home=0.20, draw=0.14, away=0.66),
+        scores=[
+            ScoreProbability(home=0, away=1, probability=0.34),
+            ScoreProbability(home=1, away=2, probability=0.20),
+            ScoreProbability(home=0, away=2, probability=0.12),
+            ScoreProbability(home=1, away=1, probability=0.14),
+            ScoreProbability(home=1, away=0, probability=0.10),
+            ScoreProbability(home=2, away=1, probability=0.10),
+        ],
+    )
+
+    class FakeProbabilityModel:
+        def predict(self, requested_fixture: Fixture) -> ProbabilityProjection:
+            assert requested_fixture is fixture
+            return projection
+
+    neutral_features = {name: 50.0 for name in [
+        "home_recent_form",
+        "away_recent_form",
+        "home_attack_index",
+        "away_attack_index",
+        "home_defense_index",
+        "away_defense_index",
+        "elo_difference",
+        "odds_move",
+        "market_heat",
+        "fatigue_index",
+        "home_advantage",
+        "injury_index",
+        "live_momentum",
+        "league_strength",
+    ]}
+    odds = [
+        Odds(
+            fixture_id=fixture.id,
+            market=OddsMarket.TOTALS,
+            bookmaker="DebugBook",
+            line=2.5,
+            over=1.90,
+            under=1.95,
+            provider="mock",
+        ),
+        Odds(
+            fixture_id=fixture.id,
+            market=OddsMarket.ASIAN_HANDICAP,
+            bookmaker="DebugBook",
+            line=0.25,
+            home=1.91,
+            away=1.91,
+            provider="mock",
+        ),
+    ]
+
+    prediction = MarketPredictionModel(probability_model=FakeProbabilityModel()).predict(
+        fixture,
+        FeatureVector(fixture.id, neutral_features),
+        odds,
+    )
+
+    assert prediction.model_source == "historical_league_poisson"
+    assert prediction.sample_count == 20
+    assert prediction.probabilities == {"home": 0.2, "draw": 0.14, "away": 0.66}
+    assert prediction.moneyline_pick == "AWAY"
+    assert prediction.predicted_side == "Away"
+    assert prediction.score.text.startswith("0-1")
+    assert prediction.total_goals.pick == "UNDER"
+    assert prediction.total_goals.model_probability == 0.7
+    assert prediction.total_goals.market_probability is not None
+    assert prediction.total_goals.expected_value is not None
+    assert prediction.handicap.pick == "AWAY_HANDICAP"
+    assert prediction.handicap.model_probability == 0.695
+    assert prediction.handicap.market_probability is not None
+    assert prediction.handicap.expected_value is not None
 
 
 def test_today_recommendations_archive_prediction_results(mock_pipeline) -> None:

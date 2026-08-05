@@ -5,7 +5,17 @@ from math import exp, factorial
 
 from datahub.models import Fixture, Odds, OddsMarket
 from features.models import FeatureVector
-from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
+from pipeline.models import (
+    HandicapPrediction,
+    MarketPrediction,
+    ScorePrediction,
+    TotalGoalsPrediction,
+)
+from pipeline.probability import HistoricalProbabilityModel, LineProbability, ProbabilityProjection
+
+
+PROBABILITY_EDGE_THRESHOLD = 0.04
+NO_ODDS_PROBABILITY_THRESHOLD = 0.55
 
 
 @dataclass(slots=True)
@@ -23,16 +33,30 @@ class ExpectedGoals:
 
 
 class MarketPredictionModel:
-    """Rule-based market projection built from SportsHunter features."""
+    """Market projection using historical probabilities with rule-based fallback."""
 
-    def predict(self, fixture: Fixture, vector: FeatureVector, odds: list[Odds] | None = None) -> MarketPrediction:
+    def __init__(self, probability_model: HistoricalProbabilityModel | None = None) -> None:
+        self.probability_model = probability_model
+
+    def predict(
+        self,
+        fixture: Fixture,
+        vector: FeatureVector,
+        odds: list[Odds] | None = None,
+    ) -> MarketPrediction:
         odds = odds or []
-        expected = self._expected_goals(vector)
-        score = self._score_prediction(expected)
-        moneyline_pick, predicted_side = self._moneyline_pick(fixture, expected.margin)
-        total_goals = self._total_goals_prediction(expected, odds)
-        handicap = self._handicap_prediction(fixture, expected.margin, odds)
-        notes = self._notes(vector, expected)
+        rule_expected = self._expected_goals(vector)
+        projection = self._probability_projection(fixture)
+        expected = (
+            ExpectedGoals(projection.expected_home_goals, projection.expected_away_goals)
+            if projection is not None
+            else rule_expected
+        )
+        score = self._score_prediction(expected, projection)
+        moneyline_pick, predicted_side = self._moneyline_pick(fixture, expected.margin, projection)
+        total_goals = self._total_goals_prediction(expected, odds, projection)
+        handicap = self._handicap_prediction(fixture, expected.margin, odds, projection)
+        notes = self._notes(vector, expected, projection)
 
         return MarketPrediction(
             predicted_side=predicted_side,
@@ -41,7 +65,18 @@ class MarketPredictionModel:
             total_goals=total_goals,
             handicap=handicap,
             notes=notes,
+            probabilities=projection.outcomes.to_dict() if projection is not None else {},
+            model_source=projection.source if projection is not None else "rule",
+            sample_count=projection.sample_count if projection is not None else 0,
         )
+
+    def _probability_projection(self, fixture: Fixture) -> ProbabilityProjection | None:
+        if self.probability_model is None:
+            return None
+        try:
+            return self.probability_model.predict(fixture)
+        except Exception:  # noqa: BLE001 - market prediction must fall back to rules
+            return None
 
     @staticmethod
     def _expected_goals(vector: FeatureVector) -> ExpectedGoals:
@@ -77,7 +112,24 @@ class MarketPredictionModel:
         return ExpectedGoals(home=_clip(home_xg, 0.2, 4.5), away=_clip(away_xg, 0.2, 4.5))
 
     @staticmethod
-    def _score_prediction(expected: ExpectedGoals) -> ScorePrediction:
+    def _score_prediction(
+        expected: ExpectedGoals,
+        projection: ProbabilityProjection | None = None,
+    ) -> ScorePrediction:
+        if projection is not None:
+            likely_scores = projection.most_likely_scores(3)
+            if likely_scores:
+                primary = likely_scores[0]
+                alternatives = [score.text for score in likely_scores[1:]]
+                return ScorePrediction(
+                    home=primary.home,
+                    away=primary.away,
+                    expected_home_goals=expected.home,
+                    expected_away_goals=expected.away,
+                    text=" / ".join([primary.text, *alternatives]),
+                    alternatives=alternatives,
+                )
+
         home_goals, away_goals, alternatives = _most_likely_scores(expected)
         primary_text = f"{home_goals}-{away_goals}"
         display_scores = [primary_text, *alternatives[:2]]
@@ -91,7 +143,20 @@ class MarketPredictionModel:
         )
 
     @staticmethod
-    def _moneyline_pick(fixture: Fixture, margin: float) -> tuple[str, str | None]:
+    def _moneyline_pick(
+        fixture: Fixture,
+        margin: float,
+        projection: ProbabilityProjection | None = None,
+    ) -> tuple[str, str | None]:
+        if projection is not None:
+            outcomes = [
+                ("HOME", projection.outcomes.home, fixture.home_team.name),
+                ("DRAW", projection.outcomes.draw, None),
+                ("AWAY", projection.outcomes.away, fixture.away_team.name),
+            ]
+            pick, _, side = max(outcomes, key=lambda item: item[1])
+            return pick, side
+
         if margin >= 0.28:
             return "HOME", fixture.home_team.name
         if margin <= -0.28:
@@ -99,20 +164,92 @@ class MarketPredictionModel:
         return "DRAW", None
 
     @staticmethod
-    def _total_goals_prediction(expected: ExpectedGoals, odds: list[Odds]) -> TotalGoalsPrediction:
-        totals = next((item for item in odds if item.market == OddsMarket.TOTALS and item.line is not None), None)
+    def _total_goals_prediction(
+        expected: ExpectedGoals,
+        odds: list[Odds],
+        projection: ProbabilityProjection | None = None,
+    ) -> TotalGoalsPrediction:
+        totals = next(
+            (item for item in odds if item.market == OddsMarket.TOTALS and item.line is not None),
+            None,
+        )
         line = float(totals.line) if totals and totals.line is not None else 2.5
+
+        if projection is not None:
+            over_probability = projection.total_goals_probability(line, "OVER")
+            under_probability = projection.total_goals_probability(line, "UNDER")
+            over_market = _no_vig_pair_probability(totals.over, totals.under) if totals else None
+            under_market = _no_vig_pair_probability(totals.under, totals.over) if totals else None
+            candidates = [
+                _LineCandidate(
+                    pick="OVER",
+                    label=f"大 {line:g}",
+                    probability=over_probability,
+                    market_probability=over_market,
+                    odds=totals.over if totals else None,
+                ),
+                _LineCandidate(
+                    pick="UNDER",
+                    label=f"小 {line:g}",
+                    probability=under_probability,
+                    market_probability=under_market,
+                    odds=totals.under if totals else None,
+                ),
+            ]
+            candidate = _best_line_candidate(candidates)
+            model_probability = _effective_probability(candidate.probability)
+            expected_value = _line_expected_value(candidate.probability, candidate.odds)
+            edge = _candidate_edge(model_probability, candidate.market_probability)
+            play_available = _is_probability_play(
+                model_probability,
+                candidate.market_probability,
+                edge,
+            )
+            pick = candidate.pick if play_available else "NO_PLAY"
+            label = candidate.label if play_available else f"大小球观望 {line:g}"
+            reason = _probability_reason(
+                candidate.pick,
+                model_probability,
+                candidate.market_probability,
+                expected_value,
+            )
+            if not play_available:
+                reason = f"{reason}，优势未达到出手阈值"
+
+            return TotalGoalsPrediction(
+                line=round(line, 2),
+                pick=pick,
+                label=label,
+                expected_total=expected.total,
+                confidence=_confidence_from_probability_edge(abs(edge)) if play_available else 0.5,
+                reason=reason,
+                edge=round(edge, 4),
+                bookmaker=totals.bookmaker if totals else None,
+                over_odds=totals.over if totals else None,
+                under_odds=totals.under if totals else None,
+                market_available=totals is not None,
+                model_probability=round(model_probability, 4),
+                market_probability=_round_optional(candidate.market_probability),
+                expected_value=expected_value,
+            )
+
         edge = expected.total - line
         if edge >= 0.15:
             pick = "OVER"
             label = f"大 {line:g}"
             reason = f"预期总进球 {expected.total:g} 高于盘口 {line:g}"
-            water_adjustment = _market_confidence_adjustment(totals.over if totals else None, totals.under if totals else None)
+            water_adjustment = _market_confidence_adjustment(
+                totals.over if totals else None,
+                totals.under if totals else None,
+            )
         elif edge <= -0.15:
             pick = "UNDER"
             label = f"小 {line:g}"
             reason = f"预期总进球 {expected.total:g} 低于盘口 {line:g}"
-            water_adjustment = _market_confidence_adjustment(totals.under if totals else None, totals.over if totals else None)
+            water_adjustment = _market_confidence_adjustment(
+                totals.under if totals else None,
+                totals.over if totals else None,
+            )
         else:
             pick = "NO_PLAY"
             label = f"大小球观望 {line:g}"
@@ -137,11 +274,95 @@ class MarketPredictionModel:
         )
 
     @staticmethod
-    def _handicap_prediction(fixture: Fixture, margin: float, odds: list[Odds]) -> HandicapPrediction:
-        handicap = next((item for item in odds if item.market == OddsMarket.ASIAN_HANDICAP and item.line is not None), None)
+    def _handicap_prediction(
+        fixture: Fixture,
+        margin: float,
+        odds: list[Odds],
+        projection: ProbabilityProjection | None = None,
+    ) -> HandicapPrediction:
+        handicap = next(
+            (
+                item
+                for item in odds
+                if item.market == OddsMarket.ASIAN_HANDICAP and item.line is not None
+            ),
+            None,
+        )
         if handicap is not None and handicap.line is not None:
             home_line = float(handicap.line)
             away_line = -home_line
+
+            if projection is not None:
+                home_probability = projection.handicap_probability("home", home_line)
+                away_probability = projection.handicap_probability("away", away_line)
+                home_market = _no_vig_pair_probability(handicap.home, handicap.away)
+                away_market = _no_vig_pair_probability(handicap.away, handicap.home)
+                candidates = [
+                    _HandicapCandidate(
+                        side="home",
+                        team=fixture.home_team.name,
+                        line=home_line,
+                        label_side="主队",
+                        probability=home_probability,
+                        market_probability=home_market,
+                        odds=handicap.home,
+                    ),
+                    _HandicapCandidate(
+                        side="away",
+                        team=fixture.away_team.name,
+                        line=away_line,
+                        label_side="客队",
+                        probability=away_probability,
+                        market_probability=away_market,
+                        odds=handicap.away,
+                    ),
+                ]
+                candidate = _best_handicap_candidate(candidates)
+                model_probability = _effective_probability(candidate.probability)
+                expected_value = _line_expected_value(candidate.probability, candidate.odds)
+                edge = _candidate_edge(model_probability, candidate.market_probability)
+                play_available = _is_probability_play(
+                    model_probability,
+                    candidate.market_probability,
+                    edge,
+                )
+                line_label = "平手" if candidate.line == 0 else f"{candidate.line:g}"
+                pick = f"{candidate.side.upper()}_HANDICAP" if play_available else "NO_PLAY"
+                label = (
+                    f"{candidate.label_side} {line_label}"
+                    if play_available
+                    else f"让球观望（主队 {home_line:g}）"
+                )
+                reason = _probability_reason(
+                    candidate.label_side,
+                    model_probability,
+                    candidate.market_probability,
+                    expected_value,
+                )
+                if not play_available:
+                    reason = f"{reason}，优势未达到出手阈值"
+
+                return HandicapPrediction(
+                    side=candidate.side if play_available else None,
+                    team=candidate.team if play_available else None,
+                    line=round(candidate.line, 2),
+                    pick=pick,
+                    label=label,
+                    expected_margin=margin,
+                    confidence=(
+                        _confidence_from_probability_edge(abs(edge)) if play_available else 0.5
+                    ),
+                    reason=reason,
+                    edge=round(edge, 4),
+                    bookmaker=handicap.bookmaker,
+                    home_odds=handicap.home,
+                    away_odds=handicap.away,
+                    market_available=True,
+                    model_probability=round(model_probability, 4),
+                    market_probability=_round_optional(candidate.market_probability),
+                    expected_value=expected_value,
+                )
+
             home_cover_edge = margin + home_line
             away_cover_edge = -margin + away_line
             if max(home_cover_edge, away_cover_edge) < 0.10:
@@ -187,7 +408,11 @@ class MarketPredictionModel:
                 pick=f"{side.upper()}_HANDICAP",
                 label=f"{side_label} {line_label}",
                 expected_margin=margin,
-                confidence=_confidence_from_edge(abs(edge), base=0.52 + water_adjustment, scale=0.24),
+                confidence=_confidence_from_edge(
+                    abs(edge),
+                    base=0.52 + water_adjustment,
+                    scale=0.24,
+                ),
                 reason=reason,
                 edge=round(edge, 2),
                 bookmaker=handicap.bookmaker,
@@ -236,15 +461,50 @@ class MarketPredictionModel:
         )
 
     @staticmethod
-    def _notes(vector: FeatureVector, expected: ExpectedGoals) -> list[str]:
+    def _notes(
+        vector: FeatureVector,
+        expected: ExpectedGoals,
+        projection: ProbabilityProjection | None = None,
+    ) -> list[str]:
         notes = [
             f"预期进球 {expected.home:g}-{expected.away:g}",
         ]
+        if projection is not None:
+            probabilities = projection.outcomes
+            notes.append(
+                "历史 Poisson "
+                f"样本 {projection.sample_count} 场，主/平/客 "
+                f"{_format_probability(probabilities.home)} / "
+                f"{_format_probability(probabilities.draw)} / "
+                f"{_format_probability(probabilities.away)}"
+            )
+        else:
+            notes.append("历史样本不足，使用规则特征估算盘口")
         if "odds_missing" in vector.warnings or "odds_unavailable" in vector.warnings:
-            notes.append("盘口数据不足时，大小球和让球使用规则估算")
+            notes.append("盘口数据不足时，大小球和让球使用模型估算")
         if "statistics_unavailable" in vector.warnings:
             notes.append("赛前统计不足，比分预测已降低确定性")
         return notes
+
+
+@dataclass(slots=True)
+class _LineCandidate:
+    pick: str
+    label: str
+    probability: LineProbability
+    market_probability: float | None
+    odds: float | None
+
+
+@dataclass(slots=True)
+class _HandicapCandidate:
+    side: str
+    team: str
+    line: float
+    label_side: str
+    probability: LineProbability
+    market_probability: float | None
+    odds: float | None
 
 
 def _most_likely_scores(expected: ExpectedGoals) -> tuple[int, int, list[str]]:
@@ -254,11 +514,22 @@ def _most_likely_scores(expected: ExpectedGoals) -> tuple[int, int, list[str]]:
         for away_goals in range(0, 6):
             total = home_goals + away_goals
             margin = home_goals - away_goals
-            probability = _poisson_probability(home_goals, expected.home) * _poisson_probability(away_goals, expected.away)
+            probability = _poisson_probability(home_goals, expected.home) * _poisson_probability(
+                away_goals,
+                expected.away,
+            )
             total_penalty = abs(total - target_total) * 0.012
             margin_penalty = abs(margin - expected.margin) * 0.018
-            stale_bias_penalty = 0.006 if (home_goals, away_goals) == (2, 1) and expected.margin < 0.55 else 0.0
-            candidates.append((probability - total_penalty - margin_penalty - stale_bias_penalty, home_goals, away_goals))
+            stale_bias_penalty = (
+                0.006 if (home_goals, away_goals) == (2, 1) and expected.margin < 0.55 else 0.0
+            )
+            candidates.append(
+                (
+                    probability - total_penalty - margin_penalty - stale_bias_penalty,
+                    home_goals,
+                    away_goals,
+                )
+            )
 
     ranked = sorted(
         candidates,
@@ -281,6 +552,77 @@ def _most_likely_scores(expected: ExpectedGoals) -> tuple[int, int, list[str]]:
         if len(alternatives) >= 2:
             break
     return home_goals, away_goals, alternatives
+
+
+def _best_line_candidate(candidates: list[_LineCandidate]) -> _LineCandidate:
+    return max(
+        candidates,
+        key=lambda candidate: (
+            _candidate_edge(
+                _effective_probability(candidate.probability),
+                candidate.market_probability,
+            ),
+            _line_expected_value(candidate.probability, candidate.odds) or -99.0,
+            _effective_probability(candidate.probability),
+        ),
+    )
+
+
+def _best_handicap_candidate(candidates: list[_HandicapCandidate]) -> _HandicapCandidate:
+    return max(
+        candidates,
+        key=lambda candidate: (
+            _candidate_edge(
+                _effective_probability(candidate.probability),
+                candidate.market_probability,
+            ),
+            _line_expected_value(candidate.probability, candidate.odds) or -99.0,
+            _effective_probability(candidate.probability),
+        ),
+    )
+
+
+def _is_probability_play(
+    model_probability: float,
+    market_probability: float | None,
+    edge: float,
+) -> bool:
+    if market_probability is None and model_probability < NO_ODDS_PROBABILITY_THRESHOLD:
+        return False
+    return edge >= PROBABILITY_EDGE_THRESHOLD
+
+
+def _candidate_edge(model_probability: float, market_probability: float | None) -> float:
+    baseline = market_probability if market_probability is not None else 0.5
+    return model_probability - baseline
+
+
+def _effective_probability(probability: LineProbability) -> float:
+    return probability.win + probability.push * 0.5
+
+
+def _line_expected_value(probability: LineProbability, odds: float | None) -> float | None:
+    decimal_odds = _decimal_odds(odds)
+    if decimal_odds is None:
+        return None
+    return round(probability.win * (decimal_odds - 1) - probability.lose, 4)
+
+
+def _probability_reason(
+    label: str,
+    model_probability: float,
+    market_probability: float | None,
+    expected_value: float | None,
+) -> str:
+    reason = f"历史模型 {label} 概率 {_format_probability(model_probability)}"
+    if market_probability is not None:
+        reason = f"{reason}，去水市场概率 {_format_probability(market_probability)}"
+    else:
+        reason = f"{reason}，暂无完整盘口水位"
+    if expected_value is not None:
+        sign = "+" if expected_value >= 0 else ""
+        reason = f"{reason}，EV {sign}{expected_value:.2%}"
+    return reason
 
 
 def _target_total_goals(total_xg: float) -> int:
@@ -315,7 +657,14 @@ def _confidence_from_edge(edge: float, base: float, scale: float) -> float:
     return round(_clip(base + edge * scale, 0.5, 0.9), 2)
 
 
-def _market_confidence_adjustment(selected_odds: float | None, opposite_odds: float | None) -> float:
+def _confidence_from_probability_edge(edge: float) -> float:
+    return round(_clip(0.52 + edge * 3.0, 0.5, 0.9), 2)
+
+
+def _market_confidence_adjustment(
+    selected_odds: float | None,
+    opposite_odds: float | None,
+) -> float:
     selected_probability = _implied_probability(selected_odds)
     opposite_probability = _implied_probability(opposite_odds)
     if selected_probability is None or opposite_probability is None:
@@ -328,6 +677,20 @@ def _market_confidence_adjustment(selected_odds: float | None, opposite_odds: fl
     return 0.0
 
 
+def _no_vig_pair_probability(
+    selected_odds: float | None,
+    opposite_odds: float | None,
+) -> float | None:
+    selected_probability = _implied_probability(selected_odds)
+    opposite_probability = _implied_probability(opposite_odds)
+    if selected_probability is None:
+        return None
+    if opposite_probability is None:
+        return selected_probability
+    total = selected_probability + opposite_probability
+    return selected_probability / total if total else None
+
+
 def _implied_probability(odds: float | None) -> float | None:
     if odds is None or odds == 0:
         return None
@@ -336,6 +699,24 @@ def _implied_probability(odds: float | None) -> float | None:
     if odds >= 100:
         return 100 / (odds + 100)
     return 1 / odds
+
+
+def _decimal_odds(odds: float | None) -> float | None:
+    if odds is None or odds == 0:
+        return None
+    if odds < 0:
+        return 1 + 100 / abs(odds)
+    if odds >= 100:
+        return 1 + odds / 100
+    return odds
+
+
+def _format_probability(value: float) -> str:
+    return f"{value:.1%}"
+
+
+def _round_optional(value: float | None) -> float | None:
+    return round(value, 4) if value is not None else None
 
 
 def _clip(value: float, low: float, high: float) -> float:

@@ -9,6 +9,7 @@ from datahub.hub import DataHub, build_datahub
 from features.pipeline import FeatureBuilder, FeaturePipeline
 from optimizer.weights import load_active_rating_weights
 from pipeline.market_model import MarketPredictionModel
+from pipeline.probability import HistoricalProbabilityModel
 
 
 @dataclass(slots=True)
@@ -29,5 +30,5 @@ def build_pipeline_context(datahub: DataHub | None = None) -> PipelineContext:
         rating=HunterRatingEngine(weights=load_active_rating_weights()),
         risk=RiskEngine(),
         signal=SignalEngine(),
-        market=MarketPredictionModel(),
+        market=MarketPredictionModel(probability_model=HistoricalProbabilityModel()),
     )

@@ -42,6 +42,9 @@ class TotalGoalsPrediction:
     over_odds: float | None = None
     under_odds: float | None = None
     market_available: bool = False
+    model_probability: float | None = None
+    market_probability: float | None = None
+    expected_value: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +59,9 @@ class TotalGoalsPrediction:
             "over_odds": self.over_odds,
             "under_odds": self.under_odds,
             "market_available": self.market_available,
+            "model_probability": self.model_probability,
+            "market_probability": self.market_probability,
+            "expected_value": self.expected_value,
         }
 
 
@@ -74,6 +80,9 @@ class HandicapPrediction:
     home_odds: float | None = None
     away_odds: float | None = None
     market_available: bool = False
+    model_probability: float | None = None
+    market_probability: float | None = None
+    expected_value: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -90,6 +99,9 @@ class HandicapPrediction:
             "home_odds": self.home_odds,
             "away_odds": self.away_odds,
             "market_available": self.market_available,
+            "model_probability": self.model_probability,
+            "market_probability": self.market_probability,
+            "expected_value": self.expected_value,
         }
 
 
@@ -101,6 +113,9 @@ class MarketPrediction:
     total_goals: TotalGoalsPrediction
     handicap: HandicapPrediction
     notes: list[str]
+    probabilities: dict[str, float] = field(default_factory=dict)
+    model_source: str = "rule"
+    sample_count: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -110,6 +125,9 @@ class MarketPrediction:
             "total_goals": self.total_goals.to_dict(),
             "handicap": self.handicap.to_dict(),
             "notes": self.notes,
+            "probabilities": self.probabilities,
+            "model_source": self.model_source,
+            "sample_count": self.sample_count,
         }
 
 
