@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import exp, factorial
+import re
 
-from datahub.models import Fixture, Odds, OddsMarket
+from datahub.models import Fixture, FixtureStatus, Odds, OddsMarket
 from features.models import FeatureVector
 from pipeline.models import (
     HandicapPrediction,
@@ -47,12 +49,16 @@ class MarketPredictionModel:
         odds = odds or []
         rule_expected = self._expected_goals(vector)
         projection = self._probability_projection(fixture)
-        expected = (
+        if _fixture_score_floor(fixture) is not None:
+            projection = None
+        base_expected = (
             ExpectedGoals(projection.expected_home_goals, projection.expected_away_goals)
             if projection is not None
             else rule_expected
         )
-        score = self._score_prediction(expected, projection)
+        expected = self._market_adjusted_expected_goals(base_expected, odds, vector, projection)
+        expected = self._live_adjusted_expected_goals(fixture, expected)
+        score = self._score_prediction(fixture, expected, projection)
         moneyline_pick, predicted_side = self._moneyline_pick(fixture, expected.margin, projection)
         total_goals = self._total_goals_prediction(expected, odds, projection)
         handicap = self._handicap_prediction(fixture, expected.margin, odds, projection)
@@ -112,11 +118,41 @@ class MarketPredictionModel:
         return ExpectedGoals(home=_clip(home_xg, 0.2, 4.5), away=_clip(away_xg, 0.2, 4.5))
 
     @staticmethod
+    def _market_adjusted_expected_goals(
+        expected: ExpectedGoals,
+        odds: list[Odds],
+        vector: FeatureVector,
+        projection: ProbabilityProjection | None = None,
+    ) -> ExpectedGoals:
+        market_expected = _market_expected_goals(expected, odds)
+        if market_expected is None:
+            return expected
+        weight = _market_expected_weight(vector, projection)
+        return ExpectedGoals(
+            home=_clip(expected.home * (1 - weight) + market_expected.home * weight, 0.2, 5.5),
+            away=_clip(expected.away * (1 - weight) + market_expected.away * weight, 0.2, 5.5),
+        )
+
+    @staticmethod
+    def _live_adjusted_expected_goals(fixture: Fixture, expected: ExpectedGoals) -> ExpectedGoals:
+        floor = _fixture_score_floor(fixture)
+        if floor is None:
+            return expected
+        min_home, min_away = floor
+        remaining_ratio = _remaining_match_ratio(_live_elapsed_minutes(fixture))
+        return ExpectedGoals(
+            home=_clip(min_home + expected.home * remaining_ratio, min_home, min_home + 4.5),
+            away=_clip(min_away + expected.away * remaining_ratio, min_away, min_away + 4.5),
+        )
+
+    @staticmethod
     def _score_prediction(
+        fixture: Fixture,
         expected: ExpectedGoals,
         projection: ProbabilityProjection | None = None,
     ) -> ScorePrediction:
-        if projection is not None:
+        score_floor = _fixture_score_floor(fixture)
+        if projection is not None and score_floor is None:
             likely_scores = projection.most_likely_scores(3)
             if likely_scores:
                 primary = likely_scores[0]
@@ -130,7 +166,8 @@ class MarketPredictionModel:
                     alternatives=alternatives,
                 )
 
-        home_goals, away_goals, alternatives = _most_likely_scores(expected)
+        min_home, min_away = score_floor or (0, 0)
+        home_goals, away_goals, alternatives = _most_likely_scores(expected, min_home, min_away)
         primary_text = f"{home_goals}-{away_goals}"
         display_scores = [primary_text, *alternatives[:2]]
         return ScorePrediction(
@@ -507,11 +544,17 @@ class _HandicapCandidate:
     odds: float | None
 
 
-def _most_likely_scores(expected: ExpectedGoals) -> tuple[int, int, list[str]]:
+def _most_likely_scores(
+    expected: ExpectedGoals,
+    min_home_goals: int = 0,
+    min_away_goals: int = 0,
+) -> tuple[int, int, list[str]]:
     target_total = _target_total_goals(expected.total)
     candidates: list[tuple[float, int, int]] = []
-    for home_goals in range(0, 6):
-        for away_goals in range(0, 6):
+    max_home_goals = max(5, min_home_goals + 5, int(expected.home) + 4)
+    max_away_goals = max(5, min_away_goals + 5, int(expected.away) + 4)
+    for home_goals in range(min_home_goals, max_home_goals + 1):
+        for away_goals in range(min_away_goals, max_away_goals + 1):
             total = home_goals + away_goals
             margin = home_goals - away_goals
             probability = _poisson_probability(home_goals, expected.home) * _poisson_probability(
@@ -580,6 +623,158 @@ def _best_handicap_candidate(candidates: list[_HandicapCandidate]) -> _HandicapC
             _effective_probability(candidate.probability),
         ),
     )
+
+
+def _market_expected_goals(expected: ExpectedGoals, odds: list[Odds]) -> ExpectedGoals | None:
+    total = expected.total
+    margin = expected.margin
+    has_market_signal = False
+
+    totals = next((item for item in odds if item.market == OddsMarket.TOTALS and item.line is not None), None)
+    if totals is not None and totals.line is not None:
+        total = float(totals.line)
+        total_edge = _pair_probability_edge(totals.over, totals.under)
+        if total_edge is not None:
+            total += total_edge * 0.70
+        has_market_signal = True
+
+    handicap = next(
+        (item for item in odds if item.market == OddsMarket.ASIAN_HANDICAP and item.line is not None),
+        None,
+    )
+    if handicap is not None and handicap.line is not None:
+        margin = -float(handicap.line)
+        handicap_edge = _pair_probability_edge(handicap.home, handicap.away)
+        if handicap_edge is not None:
+            margin += handicap_edge * 0.55
+        has_market_signal = True
+    else:
+        european = next(
+            (
+                item
+                for item in odds
+                if item.market == OddsMarket.EUROPEAN and item.home is not None and item.away is not None
+            ),
+            None,
+        )
+        probabilities = _no_vig_three_way_probabilities(european) if european else None
+        if probabilities is not None:
+            margin = (probabilities[0] - probabilities[2]) * 2.10
+            has_market_signal = True
+
+    if not has_market_signal:
+        return None
+
+    total = _clip(total, 1.1, 4.5)
+    max_margin = max(0.2, total - 0.45)
+    margin = _clip(margin, -max_margin, max_margin)
+    return ExpectedGoals(
+        home=_clip((total + margin) / 2, 0.2, 5.5),
+        away=_clip((total - margin) / 2, 0.2, 5.5),
+    )
+
+
+def _market_expected_weight(
+    vector: FeatureVector,
+    projection: ProbabilityProjection | None,
+) -> float:
+    weight = 0.35
+    if "statistics_unavailable" in vector.warnings:
+        weight += 0.18
+    if "standings_unavailable" in vector.warnings:
+        weight += 0.08
+    if projection is not None:
+        relevant_team_samples = projection.home_team_sample_count + projection.away_team_sample_count
+        if projection.source == "historical_league_poisson":
+            weight -= 0.10
+        if relevant_team_samples >= 6:
+            weight -= 0.12
+    return _clip(weight, 0.20, 0.70)
+
+
+def _pair_probability_edge(selected_odds: float | None, opposite_odds: float | None) -> float | None:
+    selected_probability = _no_vig_pair_probability(selected_odds, opposite_odds)
+    opposite_probability = _no_vig_pair_probability(opposite_odds, selected_odds)
+    if selected_probability is None or opposite_probability is None:
+        return None
+    return selected_probability - opposite_probability
+
+
+def _no_vig_three_way_probabilities(odds: Odds | None) -> tuple[float, float, float] | None:
+    if odds is None:
+        return None
+    home = _implied_probability(odds.home)
+    draw = _implied_probability(odds.draw)
+    away = _implied_probability(odds.away)
+    if home is None or away is None:
+        return None
+    total = home + away + (draw or 0.0)
+    if total <= 0:
+        return None
+    return home / total, (draw or 0.0) / total, away / total
+
+
+def _fixture_score_floor(fixture: Fixture) -> tuple[int, int] | None:
+    if fixture.status != FixtureStatus.LIVE or fixture.score is None:
+        return None
+    if fixture.score.home is None or fixture.score.away is None:
+        return None
+    return max(0, int(fixture.score.home)), max(0, int(fixture.score.away))
+
+
+def _live_elapsed_minutes(fixture: Fixture) -> float | None:
+    score = fixture.score
+    texts = [
+        getattr(score, "clock", None),
+        getattr(score, "period", None),
+    ]
+    raw_status = {}
+    if isinstance(fixture.raw, dict):
+        raw_status = (
+            fixture.raw.get("status")
+            or ((fixture.raw.get("competitions") or [{}])[0].get("status") if fixture.raw.get("competitions") else {})
+            or {}
+        )
+    status_type = raw_status.get("type") if isinstance(raw_status, dict) else {}
+    if isinstance(status_type, dict):
+        texts.extend([status_type.get("detail"), status_type.get("shortDetail"), status_type.get("description")])
+    if isinstance(raw_status, dict):
+        texts.append(raw_status.get("displayClock"))
+
+    for text in texts:
+        minute = _first_live_minute(text)
+        if minute is not None:
+            return minute
+
+    start_time = _as_utc(getattr(fixture, "start_time", None))
+    if start_time is not None:
+        return _clip((datetime.now(timezone.utc) - start_time).total_seconds() / 60, 0.0, 130.0)
+    return None
+
+
+def _first_live_minute(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    text = str(value)
+    for match in re.finditer(r"\d{1,3}", text):
+        minute = float(match.group(0))
+        if 0 <= minute <= 130:
+            return minute
+    return None
+
+
+def _remaining_match_ratio(elapsed_minutes: float | None) -> float:
+    if elapsed_minutes is None:
+        return 0.50
+    return _clip((96.0 - elapsed_minutes) / 96.0, 0.06, 0.92)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _is_probability_play(

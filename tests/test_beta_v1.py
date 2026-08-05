@@ -21,7 +21,7 @@ from database.models import LearningRecord, MatchResult, ModelVersion, OddsSnaps
 from database.repositories import DashboardRepository, SportsRepository
 from database.session import _configure_sqlite_connection, _engine_kwargs
 from datahub.hub import DataHub
-from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Team
+from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Team
 from datahub.providers.mock import MockProvider
 from data_sync import engine as data_sync_engine
 from data_sync.models import SyncSummary
@@ -555,6 +555,63 @@ def test_feature_builder_missing_data_stays_neutral() -> None:
     assert "statistics_unavailable" in vector.warnings
 
 
+def test_feature_builder_uses_standings_when_statistics_are_missing() -> None:
+    fixture = Fixture(
+        id="standings-fixture",
+        league=League(id="eng.1", name="Premier League"),
+        home_team=Team(id="home", name="Home"),
+        away_team=Team(id="away", name="Away"),
+        start_time=datetime.now(timezone.utc),
+    )
+
+    class StandingsDataHub:
+        def get_fixture(self, fixture_id: str) -> Fixture:
+            assert fixture_id == fixture.id
+            return fixture
+
+        def get_odds(self, fixture_id: str) -> list:
+            assert fixture_id == fixture.id
+            return []
+
+        def get_statistics(self, fixture_id: str):
+            assert fixture_id == fixture.id
+            raise RuntimeError("stats missing")
+
+        def get_standings(self, league_id: str) -> list[Standing]:
+            assert league_id == fixture.league.id
+            return [
+                Standing(
+                    league_id=league_id,
+                    team=fixture.home_team,
+                    rank=1,
+                    points=42,
+                    played=18,
+                    wins=13,
+                    draws=3,
+                    losses=2,
+                ),
+                Standing(
+                    league_id=league_id,
+                    team=fixture.away_team,
+                    rank=18,
+                    points=12,
+                    played=18,
+                    wins=3,
+                    draws=3,
+                    losses=12,
+                ),
+            ]
+
+    vector = FeatureBuilder(StandingsDataHub()).build(fixture.id)
+
+    assert vector.features["home_recent_form"] > vector.features["away_recent_form"]
+    assert vector.features["home_attack_index"] > vector.features["away_attack_index"]
+    assert vector.features["home_defense_index"] > vector.features["away_defense_index"]
+    assert vector.features["elo_difference"] > 50
+    assert "statistics_unavailable" in vector.warnings
+    assert "standings_unavailable" not in vector.warnings
+
+
 def test_market_prediction_scoreline_varies_with_match_profile() -> None:
     model = MarketPredictionModel()
     fixture = Fixture(
@@ -596,6 +653,119 @@ def test_market_prediction_scoreline_varies_with_match_profile() -> None:
     assert away_strong[1:] == ("AWAY", "Away")
     assert len({neutral[0], home_strong[0], away_strong[0], low_total[0], high_total[0]}) >= 4
     assert not all(item == "2-1" for item in [neutral[0], home_strong[0], away_strong[0], low_total[0], high_total[0]])
+
+
+def test_market_prediction_scoreline_uses_market_lines_when_features_are_sparse() -> None:
+    model = MarketPredictionModel()
+    fixture = Fixture(
+        id="market-lines-score",
+        league=League(id="league", name="Debug League"),
+        home_team=Team(id="home", name="Home"),
+        away_team=Team(id="away", name="Away"),
+        start_time=datetime.now(timezone.utc),
+    )
+    sparse_features = {name: 50.0 for name in [
+        "home_recent_form",
+        "away_recent_form",
+        "home_attack_index",
+        "away_attack_index",
+        "home_defense_index",
+        "away_defense_index",
+        "elo_difference",
+        "odds_move",
+        "market_heat",
+        "fatigue_index",
+        "home_advantage",
+        "injury_index",
+        "live_momentum",
+        "league_strength",
+    ]}
+    vector = FeatureVector(
+        fixture.id,
+        sparse_features,
+        warnings=["statistics_unavailable", "standings_unavailable"],
+    )
+    low_total_away_odds = [
+        Odds(
+            fixture_id=fixture.id,
+            market=OddsMarket.TOTALS,
+            bookmaker="DebugBook",
+            line=2.0,
+            over=2.20,
+            under=1.72,
+        ),
+        Odds(
+            fixture_id=fixture.id,
+            market=OddsMarket.ASIAN_HANDICAP,
+            bookmaker="DebugBook",
+            line=0.5,
+            home=1.95,
+            away=1.85,
+        ),
+    ]
+    high_total_home_odds = [
+        Odds(
+            fixture_id=fixture.id,
+            market=OddsMarket.TOTALS,
+            bookmaker="DebugBook",
+            line=3.0,
+            over=1.75,
+            under=2.10,
+        ),
+        Odds(
+            fixture_id=fixture.id,
+            market=OddsMarket.ASIAN_HANDICAP,
+            bookmaker="DebugBook",
+            line=-0.75,
+            home=1.80,
+            away=2.05,
+        ),
+    ]
+
+    low_total = model.predict(fixture, vector, low_total_away_odds)
+    high_total = model.predict(fixture, vector, high_total_home_odds)
+
+    assert low_total.score.text != high_total.score.text
+    assert low_total.score.expected_home_goals < high_total.score.expected_home_goals
+    assert low_total.score.expected_away_goals >= high_total.score.expected_away_goals
+
+
+def test_live_score_prediction_respects_current_score_floor() -> None:
+    model = MarketPredictionModel()
+    fixture = Fixture(
+        id="live-score-floor",
+        league=League(id="league", name="Debug League"),
+        home_team=Team(id="home", name="Home"),
+        away_team=Team(id="away", name="Away"),
+        start_time=datetime.now(timezone.utc) - timedelta(minutes=67),
+        status=FixtureStatus.LIVE,
+        score=Score(home=2, away=1, period="67", clock="67"),
+    )
+    features = {name: 50.0 for name in [
+        "home_recent_form",
+        "away_recent_form",
+        "home_attack_index",
+        "away_attack_index",
+        "home_defense_index",
+        "away_defense_index",
+        "elo_difference",
+        "odds_move",
+        "market_heat",
+        "fatigue_index",
+        "home_advantage",
+        "injury_index",
+        "live_momentum",
+        "league_strength",
+    ]}
+
+    prediction = model.predict(fixture, FeatureVector(fixture.id, features), [])
+
+    assert prediction.score.home >= 2
+    assert prediction.score.away >= 1
+    assert all(
+        int(text.split("-")[0]) >= 2 and int(text.split("-")[1]) >= 1
+        for text in prediction.score.text.split(" / ")
+    )
 
 
 def test_historical_probability_model_uses_settled_results() -> None:
@@ -647,6 +817,49 @@ def test_historical_probability_model_uses_settled_results() -> None:
     assert projection.outcomes.home > projection.outcomes.away
     assert projection.total_goals_probability(2.25, "OVER").win > 0
     assert projection.handicap_probability("home", -0.25).effective > 0.5
+
+
+def test_historical_probability_model_skips_irrelevant_global_only_history() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    other_league = League(id="other-league", name="Other League", provider="mock")
+    other_home = Team(id="other-home", name="Other Home", provider="mock")
+    other_away = Team(id="other-away", name="Other Away", provider="mock")
+
+    with Session() as session:
+        repo = SportsRepository(session)
+        for index in range(1, 7):
+            historical_fixture = Fixture(
+                id=f"other-history-{index}",
+                league=other_league,
+                home_team=other_home,
+                away_team=other_away,
+                start_time=now - timedelta(days=index * 5),
+                status=FixtureStatus.FINISHED,
+                provider="mock",
+            )
+            db_fixture = repo.upsert_fixture(historical_fixture)
+            repo.upsert_match_result(db_fixture, home_score=1, away_score=1)
+        session.commit()
+
+    upcoming = Fixture(
+        id="unrelated-future",
+        league=League(id="new-league", name="New League", provider="mock"),
+        home_team=Team(id="new-home", name="New Home", provider="mock"),
+        away_team=Team(id="new-away", name="New Away", provider="mock"),
+        start_time=now,
+        status=FixtureStatus.SCHEDULED,
+        provider="mock",
+    )
+
+    projection = HistoricalProbabilityModel(
+        session_factory=Session,
+        min_league_matches=4,
+    ).predict(upcoming)
+
+    assert projection is None
 
 
 def test_market_prediction_uses_probability_projection_for_edges_and_ev() -> None:

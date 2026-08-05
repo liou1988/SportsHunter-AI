@@ -187,13 +187,21 @@ class HistoricalProbabilityModel:
             if model_rows is league_rows
             else "historical_global_poisson"
         )
-        return _build_projection(
+        projection = _build_projection(
             fixture,
             model_rows,
             source=source,
             sample_count=len(rows),
             league_sample_count=len(league_rows),
         )
+        if (
+            projection.source == "historical_global_poisson"
+            and projection.league_sample_count == 0
+            and projection.home_team_sample_count == 0
+            and projection.away_team_sample_count == 0
+        ):
+            return None
+        return projection
 
     def _rows(self, fixture: Fixture) -> list[tuple[orm.Fixture, orm.MatchResult]]:
         until = _as_utc(fixture.start_time) or datetime.now(timezone.utc)
