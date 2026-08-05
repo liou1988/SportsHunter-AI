@@ -15,17 +15,30 @@ External bookmaker odds can be enabled as a supplemental source without
 replacing the free fixture feed:
 
 - `ODDS_AGGREGATOR_ENABLED=true`
+- `ODDS_AGGREGATOR_PROVIDER=api_football`
+- `API_FOOTBALL_KEY=<your API-Football key>`
+- `API_FOOTBALL_LIVE_ODDS_ENABLED=true`
+- `API_FOOTBALL_BOOKMAKER_IDS=` optionally narrows to specific bookmaker IDs.
+- `API_FOOTBALL_BET_IDS=` optionally narrows to specific bet IDs.
+- `API_FOOTBALL_ODDS_MAX_PAGES=1` keeps the free plan quota conservative; raise
+  it to collect more paginated bookmakers per fixture.
+
+The previous The Odds API adapter remains available as an alternative:
+
 - `ODDS_AGGREGATOR_PROVIDER=the_odds_api`
 - `THE_ODDS_API_KEY=<your API key>`
 - `THE_ODDS_API_REGIONS=uk,eu`
 - `THE_ODDS_API_BOOKMAKERS=` optionally narrows to specific bookmaker keys.
 
-When enabled, `get_odds` queries The Odds API for `h2h`, `spreads` and `totals`
-around the fixture kickoff window, matches the returned event by team names and
-kickoff time, then prepends those bookmaker odds ahead of ESPN `pickcenter`
-odds. This keeps prediction behavior unchanged when the key is absent while
-allowing legal pre-match and in-play bookmaker prices to flow into features,
-market projections and archived `odds_snapshots`.
+When API-Football is enabled, `get_odds` first matches the ESPN/TheSportsDB
+fixture to API-Football's fixture ID by team names and kickoff time, then pulls
+pre-match odds from `/odds`. For live fixtures it also pulls `/odds/live` before
+pre-match odds so in-play prices are preferred when available. The adapter maps
+Match Winner, Goals Over/Under and Asian Handicap style bets into the existing
+European, totals and Asian handicap markets, then prepends those bookmaker odds
+ahead of ESPN `pickcenter` odds. This keeps prediction behavior unchanged when
+the key is absent while allowing legal pre-match and in-play bookmaker prices to
+flow into features, market projections and archived `odds_snapshots`.
 
 `FREE_PROVIDER_FOOTBALL_LEAGUES` controls ESPN league scanning. The default list
 now covers major European leagues and cups, South America, North America, Asia,

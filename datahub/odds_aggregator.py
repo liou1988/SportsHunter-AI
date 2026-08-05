@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any
 
 from config.settings import Settings
 from datahub.http_client import HttpJsonClient
-from datahub.models import Fixture, Odds, OddsMarket
+from datahub.models import Fixture, FixtureStatus, Odds, OddsMarket
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,82 @@ THE_ODDS_API_SPORT_KEYS = {
 }
 
 
+class ApiFootballOddsProvider:
+    name = "api_football"
+
+    def __init__(self, settings: Settings, client: HttpJsonClient | None = None) -> None:
+        self.settings = settings
+        headers = {"x-apisports-key": str(settings.api_football_key)} if settings.api_football_key else {}
+        self.client = client or HttpJsonClient(settings, settings.api_football_base_url, headers=headers)
+        self._fixtures_by_date_cache: dict[str, list[dict[str, Any]]] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.settings.odds_aggregator_enabled and self.settings.api_football_key)
+
+    def get_odds(self, fixture: Fixture) -> list[Odds]:
+        if not self.enabled:
+            return []
+
+        api_fixture = self._match_fixture(fixture)
+        api_fixture_id = _api_football_fixture_id(api_fixture)
+        if api_fixture_id is None:
+            return []
+
+        odds_items: list[Odds] = []
+        if fixture.status == FixtureStatus.LIVE and self.settings.api_football_live_odds_enabled:
+            odds_items.extend(self._get_live_odds(fixture, api_fixture_id))
+        odds_items.extend(self._get_prematch_odds(fixture, api_fixture_id))
+        return odds_items
+
+    def _match_fixture(self, fixture: Fixture) -> dict[str, Any] | None:
+        date_key = _as_utc(fixture.start_time).date().isoformat()
+        events = self._fixtures_by_date_cache.get(date_key)
+        if events is None:
+            payload = self.client.get_json(
+                "/fixtures",
+                params={
+                    "date": date_key,
+                    "timezone": "UTC",
+                },
+            )
+            events = _api_football_response_items(payload)
+            self._fixtures_by_date_cache[date_key] = events
+        return _best_api_football_fixture_match(fixture, events)
+
+    def _get_prematch_odds(self, fixture: Fixture, api_fixture_id: int) -> list[Odds]:
+        params = self._odds_params(api_fixture_id)
+        payload = self.client.get_json("/odds", params=params)
+        odds_items: list[Odds] = []
+        for event in _api_football_response_items(payload):
+            odds_items.extend(_parse_api_football_prematch_event(fixture, event))
+        max_pages = max(1, self.settings.api_football_odds_max_pages)
+        total_pages = min(_api_football_total_pages(payload), max_pages)
+        for page in range(2, total_pages + 1):
+            paged_payload = self.client.get_json("/odds", params={**params, "page": str(page)})
+            for event in _api_football_response_items(paged_payload):
+                odds_items.extend(_parse_api_football_prematch_event(fixture, event))
+        return odds_items
+
+    def _get_live_odds(self, fixture: Fixture, api_fixture_id: int) -> list[Odds]:
+        params = {"fixture": str(api_fixture_id)}
+        if self.settings.api_football_bet_ids:
+            params["bet"] = ",".join(self.settings.api_football_bet_ids)
+        payload = self.client.get_json("/odds/live", params=params)
+        odds_items: list[Odds] = []
+        for event in _api_football_response_items(payload):
+            odds_items.extend(_parse_api_football_live_event(fixture, event))
+        return odds_items
+
+    def _odds_params(self, api_fixture_id: int) -> dict[str, str]:
+        params = {"fixture": str(api_fixture_id)}
+        if self.settings.api_football_bookmaker_ids:
+            params["bookmaker"] = ",".join(self.settings.api_football_bookmaker_ids)
+        if self.settings.api_football_bet_ids:
+            params["bet"] = ",".join(self.settings.api_football_bet_ids)
+        return params
+
+
 class TheOddsApiOddsProvider:
     name = "the_odds_api"
 
@@ -104,10 +181,12 @@ class TheOddsApiOddsProvider:
         return params
 
 
-def build_odds_aggregator(settings: Settings) -> TheOddsApiOddsProvider | None:
+def build_odds_aggregator(settings: Settings) -> TheOddsApiOddsProvider | ApiFootballOddsProvider | None:
     provider = (settings.odds_aggregator_provider or "").strip().lower()
     if provider in {"", "none", "off"}:
         return None
+    if provider == ApiFootballOddsProvider.name:
+        return ApiFootballOddsProvider(settings)
     if provider == TheOddsApiOddsProvider.name:
         return TheOddsApiOddsProvider(settings)
     logger.warning("unsupported odds aggregator configured", extra={"provider": provider})
@@ -119,6 +198,381 @@ def sport_key_for_fixture(fixture: Fixture) -> str | None:
     if league_id.startswith("tsdb:"):
         return None
     return THE_ODDS_API_SPORT_KEYS.get(league_id)
+
+
+def _api_football_response_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if errors:
+        logger.warning("api-football returned errors", extra={"errors": errors})
+        return []
+    response = payload.get("response", []) if isinstance(payload, dict) else []
+    return response if isinstance(response, list) else []
+
+
+def _api_football_total_pages(payload: dict[str, Any]) -> int:
+    paging = payload.get("paging") if isinstance(payload, dict) else None
+    total = _safe_int((paging or {}).get("total"))
+    return total or 1
+
+
+def _api_football_fixture_id(event: dict[str, Any] | None) -> int | None:
+    if not event:
+        return None
+    return _safe_int((event.get("fixture") or {}).get("id"))
+
+
+def _best_api_football_fixture_match(
+    fixture: Fixture,
+    events: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    ranked = sorted(
+        ((_api_football_fixture_match_score(fixture, event), event) for event in events),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    if not ranked or ranked[0][0] < EVENT_MATCH_THRESHOLD:
+        return None
+    return ranked[0][1]
+
+
+def _api_football_fixture_match_score(fixture: Fixture, event: dict[str, Any]) -> float:
+    teams = event.get("teams") or {}
+    home = str((teams.get("home") or {}).get("name") or "")
+    away = str((teams.get("away") or {}).get("name") or "")
+    same_side = (
+        _similarity(fixture.home_team.name, home) + _similarity(fixture.away_team.name, away)
+    ) / 2
+    reversed_side = (
+        _similarity(fixture.home_team.name, away) + _similarity(fixture.away_team.name, home)
+    ) / 2
+    team_score = max(same_side, reversed_side * 0.92)
+    event_time = _parse_datetime((event.get("fixture") or {}).get("date"))
+    if event_time is None:
+        return team_score
+    hours = abs((_as_utc(fixture.start_time) - event_time).total_seconds()) / 3600
+    time_score = max(0.0, 1 - hours / ODDS_WINDOW_HOURS)
+    return team_score * 0.85 + time_score * 0.15
+
+
+def _parse_api_football_prematch_event(fixture: Fixture, event: dict[str, Any]) -> list[Odds]:
+    odds_items: list[Odds] = []
+    captured_at = _parse_datetime(event.get("update")) or datetime.now(timezone.utc)
+    for bookmaker in event.get("bookmakers", []) or []:
+        bookmaker_name = str(bookmaker.get("name") or bookmaker.get("id") or "API-Football")
+        for bet in bookmaker.get("bets", []) or []:
+            odds_items.extend(_parse_api_football_bet(fixture, bookmaker_name, captured_at, event, bet))
+    return odds_items
+
+
+def _parse_api_football_live_event(fixture: Fixture, event: dict[str, Any]) -> list[Odds]:
+    odds_items: list[Odds] = []
+    captured_at = (
+        _parse_datetime(event.get("update"))
+        or _parse_datetime((event.get("fixture") or {}).get("date"))
+        or datetime.now(timezone.utc)
+    )
+
+    bookmakers = event.get("bookmakers")
+    if isinstance(bookmakers, list):
+        for bookmaker in bookmakers:
+            bookmaker_name = str(bookmaker.get("name") or bookmaker.get("id") or "API-Football Live")
+            for bet in bookmaker.get("bets", []) or bookmaker.get("odds", []) or []:
+                odds_items.extend(_parse_api_football_bet(fixture, bookmaker_name, captured_at, event, bet))
+        return odds_items
+
+    bookmaker = event.get("bookmaker")
+    if isinstance(bookmaker, dict):
+        bookmaker_name = str(bookmaker.get("name") or bookmaker.get("id") or "API-Football Live")
+    else:
+        bookmaker_name = str(bookmaker or "API-Football Live")
+    for bet in event.get("odds", []) or event.get("bets", []) or []:
+        odds_items.extend(_parse_api_football_bet(fixture, bookmaker_name, captured_at, event, bet))
+    return odds_items
+
+
+def _parse_api_football_bet(
+    fixture: Fixture,
+    bookmaker: str,
+    captured_at: datetime,
+    event: dict[str, Any],
+    bet: dict[str, Any],
+) -> list[Odds]:
+    bet_name = str(bet.get("name") or "")
+    values = _active_api_football_values(bet.get("values", []) or [])
+    if not values:
+        return []
+
+    if _is_api_football_h2h_bet(bet, values):
+        odds = _parse_api_football_h2h(fixture, bookmaker, captured_at, event, bet, values)
+    elif _is_api_football_totals_bet(bet_name, values):
+        odds = _parse_api_football_totals(fixture, bookmaker, captured_at, event, bet, values)
+    elif _is_api_football_handicap_bet(bet_name, values):
+        odds = _parse_api_football_handicap(fixture, bookmaker, captured_at, event, bet, values)
+    else:
+        odds = None
+    return [odds] if odds is not None else []
+
+
+def _active_api_football_values(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        value
+        for value in values
+        if str(value.get("suspended") or "").casefold() not in {"true", "1", "yes"}
+        and str(value.get("blocked") or "").casefold() not in {"true", "1", "yes"}
+    ]
+
+
+def _is_api_football_h2h_bet(bet: dict[str, Any], values: list[dict[str, Any]]) -> bool:
+    bet_id = str(bet.get("id") or "")
+    bet_name = str(bet.get("name") or "").strip().casefold()
+    value_names = {_api_football_value_label(value).strip().casefold() for value in values}
+    return (
+        bet_id == "1"
+        or bet_name in {"match winner", "1x2", "winner", "fulltime result", "full time result"}
+        or {"home", "draw", "away"}.issubset(value_names)
+    )
+
+
+def _is_api_football_totals_bet(bet_name: str, values: list[dict[str, Any]]) -> bool:
+    lowered = bet_name.casefold()
+    if "over/under" in lowered or "goals over" in lowered or "total" in lowered:
+        return True
+    labels = [_api_football_value_label(value).casefold() for value in values]
+    return any("over" in label for label in labels) and any("under" in label for label in labels)
+
+
+def _is_api_football_handicap_bet(bet_name: str, values: list[dict[str, Any]]) -> bool:
+    lowered = bet_name.casefold()
+    if "handicap" in lowered or "spread" in lowered:
+        return True
+    labels = [_api_football_value_label(value).casefold() for value in values]
+    return any("home" in label for label in labels) and any("away" in label for label in labels)
+
+
+def _parse_api_football_h2h(
+    fixture: Fixture,
+    bookmaker: str,
+    captured_at: datetime,
+    event: dict[str, Any],
+    bet: dict[str, Any],
+    values: list[dict[str, Any]],
+) -> Odds | None:
+    home = _api_football_side_value(values, "home", fixture.home_team.name)
+    away = _api_football_side_value(values, "away", fixture.away_team.name)
+    draw = _api_football_named_value(values, {"draw", "x"})
+    if home is None and away is None and draw is None:
+        return None
+    return Odds(
+        fixture_id=fixture.id,
+        market=OddsMarket.EUROPEAN,
+        bookmaker=bookmaker,
+        captured_at=captured_at,
+        home=_api_football_odd(home) if home else None,
+        draw=_api_football_odd(draw) if draw else None,
+        away=_api_football_odd(away) if away else None,
+        provider=ApiFootballOddsProvider.name,
+        raw=_api_football_raw(event, bet),
+    )
+
+
+def _parse_api_football_totals(
+    fixture: Fixture,
+    bookmaker: str,
+    captured_at: datetime,
+    event: dict[str, Any],
+    bet: dict[str, Any],
+    values: list[dict[str, Any]],
+) -> Odds | None:
+    pair = _api_football_total_pair(values, str(bet.get("name") or ""))
+    if pair is None:
+        return None
+    line, over, under = pair
+    return Odds(
+        fixture_id=fixture.id,
+        market=OddsMarket.TOTALS,
+        bookmaker=bookmaker,
+        captured_at=captured_at,
+        line=line,
+        over=_api_football_odd(over) if over else None,
+        under=_api_football_odd(under) if under else None,
+        provider=ApiFootballOddsProvider.name,
+        raw=_api_football_raw(event, bet),
+    )
+
+
+def _parse_api_football_handicap(
+    fixture: Fixture,
+    bookmaker: str,
+    captured_at: datetime,
+    event: dict[str, Any],
+    bet: dict[str, Any],
+    values: list[dict[str, Any]],
+) -> Odds | None:
+    pair = _api_football_handicap_pair(fixture, values, str(bet.get("name") or ""))
+    if pair is None:
+        return None
+    line, home, away = pair
+    return Odds(
+        fixture_id=fixture.id,
+        market=OddsMarket.ASIAN_HANDICAP,
+        bookmaker=bookmaker,
+        captured_at=captured_at,
+        line=line,
+        home=_api_football_odd(home) if home else None,
+        away=_api_football_odd(away) if away else None,
+        provider=ApiFootballOddsProvider.name,
+        raw=_api_football_raw(event, bet),
+    )
+
+
+def _api_football_total_pair(
+    values: list[dict[str, Any]],
+    fallback_label: str,
+) -> tuple[float | None, dict[str, Any] | None, dict[str, Any] | None] | None:
+    by_line: dict[float | None, dict[str, Any]] = {}
+    for value in values:
+        label = _api_football_value_label(value)
+        side = _api_football_total_side(label)
+        if side is None:
+            continue
+        line = _api_football_line(value, fallback_label)
+        group = by_line.setdefault(line, {})
+        group[side] = value
+        if _api_football_is_main(value):
+            group["main"] = True
+
+    return _select_api_football_pair(by_line, "over", "under", prefer_common_total=True)
+
+
+def _api_football_handicap_pair(
+    fixture: Fixture,
+    values: list[dict[str, Any]],
+    fallback_label: str,
+) -> tuple[float | None, dict[str, Any] | None, dict[str, Any] | None] | None:
+    by_line: dict[float | None, dict[str, Any]] = {}
+    for value in values:
+        side = _api_football_value_side(fixture, value)
+        if side is None:
+            continue
+        value_line = _api_football_line(value, fallback_label)
+        line = -value_line if side == "away" and value_line is not None else value_line
+        group = by_line.setdefault(line, {})
+        group[side] = value
+        if _api_football_is_main(value):
+            group["main"] = True
+
+    return _select_api_football_pair(by_line, "home", "away")
+
+
+def _select_api_football_pair(
+    by_line: dict[float | None, dict[str, Any]],
+    left_key: str,
+    right_key: str,
+    *,
+    prefer_common_total: bool = False,
+) -> tuple[float | None, dict[str, Any] | None, dict[str, Any] | None] | None:
+    if not by_line:
+        return None
+    ranked = sorted(
+        by_line.items(),
+        key=lambda item: (
+            item[1].get(left_key) is not None and item[1].get(right_key) is not None,
+            bool(item[1].get("main")),
+            prefer_common_total and item[0] == 2.5,
+            item[0] is not None,
+        ),
+        reverse=True,
+    )
+    line, group = ranked[0]
+    left = group.get(left_key)
+    right = group.get(right_key)
+    if left is None and right is None:
+        return None
+    return line, left, right
+
+
+def _api_football_total_side(label: str) -> str | None:
+    lowered = label.strip().casefold()
+    if lowered.startswith("over") or " over " in f" {lowered} ":
+        return "over"
+    if lowered.startswith("under") or " under " in f" {lowered} ":
+        return "under"
+    return None
+
+
+def _api_football_value_side(fixture: Fixture, value: dict[str, Any]) -> str | None:
+    label = _api_football_value_label(value)
+    lowered = label.strip().casefold()
+    if lowered.startswith("home") or lowered == "1":
+        return "home"
+    if lowered.startswith("away") or lowered == "2":
+        return "away"
+    if _similarity(fixture.home_team.name, label) >= EVENT_MATCH_THRESHOLD:
+        return "home"
+    if _similarity(fixture.away_team.name, label) >= EVENT_MATCH_THRESHOLD:
+        return "away"
+    return None
+
+
+def _api_football_side_value(
+    values: list[dict[str, Any]],
+    side: str,
+    team_name: str,
+) -> dict[str, Any] | None:
+    side_names = {"home", "1"} if side == "home" else {"away", "2"}
+    for value in values:
+        if _api_football_value_label(value).strip().casefold() in side_names:
+            return value
+    ranked = sorted(
+        ((_similarity(team_name, _api_football_value_label(value)), value) for value in values),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    if not ranked or ranked[0][0] < EVENT_MATCH_THRESHOLD:
+        return None
+    return ranked[0][1]
+
+
+def _api_football_named_value(values: list[dict[str, Any]], names: set[str]) -> dict[str, Any] | None:
+    for value in values:
+        if _api_football_value_label(value).strip().casefold() in names:
+            return value
+    return None
+
+
+def _api_football_value_label(value: dict[str, Any]) -> str:
+    return str(value.get("value") or value.get("name") or value.get("label") or "")
+
+
+def _api_football_line(value: dict[str, Any], fallback_label: str = "") -> float | None:
+    for key in ("handicap", "point", "line"):
+        parsed = _safe_float(value.get(key))
+        if parsed is not None:
+            return parsed
+    labels = [_api_football_value_label(value), fallback_label]
+    for label in labels:
+        matches = re.findall(r"[-+]?\d+(?:\.\d+)?", label)
+        if matches:
+            return _safe_float(matches[-1])
+    return None
+
+
+def _api_football_odd(value: dict[str, Any]) -> float | None:
+    return _safe_float(value.get("odd") or value.get("price"))
+
+
+def _api_football_is_main(value: dict[str, Any]) -> bool:
+    return str(value.get("main") or "").strip().casefold() in {"true", "1", "yes"}
+
+
+def _api_football_raw(event: dict[str, Any], bet: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": ApiFootballOddsProvider.name,
+        "fixture_id": (event.get("fixture") or {}).get("id"),
+        "bet_id": bet.get("id"),
+        "bet_name": bet.get("name"),
+        "market": bet,
+    }
 
 
 def _parse_event_odds(fixture: Fixture, event: dict[str, Any]) -> list[Odds]:
@@ -313,3 +767,8 @@ def _safe_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_int(value: object) -> int | None:
+    parsed = _safe_float(value)
+    return None if parsed is None else int(parsed)

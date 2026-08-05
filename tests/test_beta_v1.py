@@ -160,6 +160,24 @@ def test_settings_parse_odds_aggregator_config(monkeypatch) -> None:
     assert settings.the_odds_api_bookmakers == ["pinnacle", "betfair_ex_uk"]
 
 
+def test_settings_parse_api_football_odds_config(monkeypatch) -> None:
+    monkeypatch.setenv("ODDS_AGGREGATOR_ENABLED", "true")
+    monkeypatch.setenv("ODDS_AGGREGATOR_PROVIDER", "api_football")
+    monkeypatch.setenv("API_FOOTBALL_KEY", "test-key")
+    monkeypatch.setenv("API_FOOTBALL_LIVE_ODDS_ENABLED", "false")
+    monkeypatch.setenv("API_FOOTBALL_BOOKMAKER_IDS", "6,8")
+    monkeypatch.setenv("API_FOOTBALL_BET_IDS", "1,4,5")
+    monkeypatch.setenv("API_FOOTBALL_ODDS_MAX_PAGES", "2")
+    settings = Settings(_env_file=None)
+    assert settings.odds_aggregator_enabled is True
+    assert settings.odds_aggregator_provider == "api_football"
+    assert settings.api_football_key == "test-key"
+    assert settings.api_football_live_odds_enabled is False
+    assert settings.api_football_bookmaker_ids == ["6", "8"]
+    assert settings.api_football_bet_ids == ["1", "4", "5"]
+    assert settings.api_football_odds_max_pages == 2
+
+
 def test_settings_parse_telegram_alert_signals(monkeypatch) -> None:
     monkeypatch.setenv("TELEGRAM_ALERT_SIGNALS", "STRONG_BUY,BUY,WATCH")
     settings = Settings(_env_file=None)
@@ -2181,6 +2199,62 @@ def test_free_provider_prepends_the_odds_api_bookmaker_odds() -> None:
     assert captured_params["regions"] == "uk,eu"
 
 
+def test_free_provider_prepends_api_football_bookmaker_odds() -> None:
+    captured_calls: list[tuple[str, dict[str, str]]] = []
+
+    class FakeJsonClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            if path.endswith("/summary"):
+                return _summary_odds_payload()
+            return _scoreboard_payload("eng.1", ["odds-1"])
+
+    class FakeApiFootballClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            captured_calls.append((path, dict(params or {})))
+            if path == "/fixtures":
+                return _api_football_fixtures_payload()
+            if path == "/odds":
+                return _api_football_odds_payload()
+            msg = f"unexpected API-Football path {path}"
+            raise AssertionError(msg)
+
+    settings = Settings(
+        data_provider="free",
+        free_provider_sources=["espn"],
+        free_provider_football_leagues=["eng.1"],
+        odds_aggregator_enabled=True,
+        odds_aggregator_provider="api_football",
+        api_football_key="test-key",
+        _env_file=None,
+    )
+    provider = FreeFootballProvider(settings)
+    provider.client = FakeJsonClient()
+    assert provider.odds_aggregator is not None
+    provider.odds_aggregator.client = FakeApiFootballClient()
+
+    odds = provider.get_odds("odds-1")
+
+    assert [item.market for item in odds[:3]] == [
+        OddsMarket.EUROPEAN,
+        OddsMarket.TOTALS,
+        OddsMarket.ASIAN_HANDICAP,
+    ]
+    assert all(item.provider == "api_football" for item in odds[:3])
+    assert odds[0].bookmaker == "Bwin"
+    assert odds[0].home == 1.91
+    assert odds[0].draw == 3.2
+    assert odds[0].away == 4.1
+    assert odds[1].line == 2.5
+    assert odds[1].over == 1.88
+    assert odds[1].under == 1.98
+    assert odds[2].line == -0.25
+    assert odds[2].home == 1.93
+    assert odds[2].away == 1.87
+    assert odds[3].provider == "free"
+    assert captured_calls[0] == ("/fixtures", {"date": "2026-07-26", "timezone": "UTC"})
+    assert captured_calls[1] == ("/odds", {"fixture": "1001"})
+
+
 def test_free_provider_today_aggregates_supplemental_sources_and_deduplicates() -> None:
     class FakeEspnClient:
         def get_json(self, path: str, params: dict | None = None) -> dict:
@@ -2411,6 +2485,69 @@ def _the_odds_api_payload() -> list[dict]:
             ],
         }
     ]
+
+
+def _api_football_fixtures_payload() -> dict:
+    return {
+        "errors": [],
+        "response": [
+            {
+                "fixture": {
+                    "id": 1001,
+                    "date": "2026-07-26T12:00:00+00:00",
+                },
+                "teams": {
+                    "home": {"name": "eng.1 Home odds-1"},
+                    "away": {"name": "eng.1 Away odds-1"},
+                },
+            }
+        ],
+    }
+
+
+def _api_football_odds_payload() -> dict:
+    return {
+        "errors": [],
+        "response": [
+            {
+                "fixture": {"id": 1001},
+                "update": "2026-07-26T11:57:00+00:00",
+                "bookmakers": [
+                    {
+                        "id": 6,
+                        "name": "Bwin",
+                        "bets": [
+                            {
+                                "id": 1,
+                                "name": "Match Winner",
+                                "values": [
+                                    {"value": "Home", "odd": "1.91"},
+                                    {"value": "Draw", "odd": "3.20"},
+                                    {"value": "Away", "odd": "4.10"},
+                                ],
+                            },
+                            {
+                                "id": 5,
+                                "name": "Goals Over/Under",
+                                "values": [
+                                    {"value": "Over 2.5", "odd": "1.88"},
+                                    {"value": "Under 2.5", "odd": "1.98"},
+                                ],
+                            },
+                            {
+                                "id": 4,
+                                "name": "Asian Handicap",
+                                "values": [
+                                    {"value": "Home -0.25", "odd": "1.93"},
+                                    {"value": "Away +0.25", "odd": "1.87"},
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
 
 
 def _thesportsdb_events_payload(overrides: list[dict] | None = None) -> dict:

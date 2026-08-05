@@ -267,6 +267,12 @@ class Settings(BaseSettings):
     the_odds_api_regions: list[str] = Field(default_factory=lambda: ["uk", "eu"])
     the_odds_api_bookmakers: list[str] = Field(default_factory=list)
     the_odds_api_markets: list[str] = Field(default_factory=lambda: ["h2h", "spreads", "totals"])
+    api_football_key: str | None = None
+    api_football_base_url: str = "https://v3.football.api-sports.io"
+    api_football_live_odds_enabled: bool = True
+    api_football_bookmaker_ids: list[str] = Field(default_factory=list)
+    api_football_bet_ids: list[str] = Field(default_factory=list)
+    api_football_odds_max_pages: int = 1
 
     provider_timeout_seconds: float = 10.0
     provider_retry_attempts: int = 3
@@ -343,6 +349,8 @@ class Settings(BaseSettings):
         "the_odds_api_regions",
         "the_odds_api_bookmakers",
         "the_odds_api_markets",
+        "api_football_bookmaker_ids",
+        "api_football_bet_ids",
         "telegram_alert_signals",
         mode="before",
     )
@@ -360,6 +368,7 @@ class Settings(BaseSettings):
         "telegram_bot_token",
         "telegram_chat_id",
         "the_odds_api_key",
+        "api_football_key",
         mode="before",
     )
     @classmethod

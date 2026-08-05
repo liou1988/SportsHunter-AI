@@ -57,6 +57,8 @@ The free provider returns real football fixtures, live scores and basic
 statistics when available. It combines ESPN public football feeds with
 TheSportsDB's free day-event feed, aggregates all configured leagues, de-duplicates
 cross-source matches, and does not fake unavailable odds.
+Bookmaker odds can be supplemented through API-Football or The Odds API and are
+merged ahead of ESPN `pickcenter` odds when enabled.
 
 Useful provider controls:
 

@@ -30,10 +30,12 @@ Prediction/evaluation loop:
   historical Poisson model for 1X2, scoreline, totals and Asian handicap edges.
   If the provider/league sample is too small, prediction falls back to the
   rule-based expected-goals model.
-- Odds can be supplemented from The Odds API when
-  `ODDS_AGGREGATOR_ENABLED=true` and `THE_ODDS_API_KEY` is configured. External
-  bookmaker odds are preferred over ESPN odds for the same prediction call, and
-  live refreshes continue to archive snapshots every five minutes.
+- Odds can be supplemented from API-Football when
+  `ODDS_AGGREGATOR_ENABLED=true`, `ODDS_AGGREGATOR_PROVIDER=api_football` and
+  `API_FOOTBALL_KEY` are configured. External bookmaker odds are preferred over
+  ESPN odds for the same prediction call. For live fixtures, API-Football
+  `/odds/live` is queried before `/odds`, and live refreshes continue to archive
+  snapshots every five minutes.
 - Today recommendations are archived to `predictions` with deduped snapshots.
 - Successful Telegram alerts also archive the delivered prediction snapshot.
 - Finished fixtures are settled to `match_results` by the post-match collector.
