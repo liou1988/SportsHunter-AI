@@ -49,8 +49,15 @@ class DataSync:
                         if include_statistics:
                             statistics = self.datahub.get_statistics(fixture.id)
                             repo.add_statistics(db_fixture, statistics, stage="live" if live_only else "pre_match")
+                        # Release SQLite's write lock after every fixture. This also
+                        # prevents a slow upstream request from holding one long
+                        # transaction while other scheduled jobs need the database.
+                        session.commit()
                         summary.synced_count += 1
                     except Exception as exc:  # noqa: BLE001
+                        # A failed flush leaves SQLAlchemy's session unusable until
+                        # rollback. Continue syncing the remaining fixtures cleanly.
+                        session.rollback()
                         logger.error("fixture sync failed", extra={"fixture_id": fixture.id}, exc_info=exc)
                         summary.failed_count += 1
                 summary.finish()

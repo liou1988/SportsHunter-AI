@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 from io import StringIO
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -18,9 +19,11 @@ from config.logging import SensitiveDataFilter
 from database.base import Base
 from database.models import LearningRecord, MatchResult, ModelVersion, OddsSnapshot, Prediction
 from database.repositories import DashboardRepository, SportsRepository
+from database.session import _configure_sqlite_connection, _engine_kwargs
 from datahub.hub import DataHub
 from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Team
 from datahub.providers.mock import MockProvider
+from data_sync import engine as data_sync_engine
 from data_sync.models import SyncSummary
 from core.risk.models import RiskBreakdown, RiskLevel, RiskReason
 from core.signal.models import Signal
@@ -102,6 +105,34 @@ def test_settings_parse_telegram_env_aliases(monkeypatch) -> None:
     assert settings.telegram_is_enabled is True
     assert settings.telegram_effective_bot_token == "token-value"
     assert settings.telegram_effective_chat_id == "chat-value"
+
+
+def test_sqlite_engine_uses_busy_timeout_connect_args() -> None:
+    assert _engine_kwargs("sqlite:///./sports_hunter.db") == {
+        "connect_args": {"check_same_thread": False, "timeout": 30}
+    }
+    assert _engine_kwargs("postgresql+psycopg://user:pass@db/sportshunter") == {}
+
+
+def test_sqlite_connection_pragmas_enable_concurrent_runtime(tmp_path) -> None:
+    connection = sqlite3.connect(tmp_path / "sports_hunter.db")
+    try:
+        _configure_sqlite_connection(connection, None)
+        cursor = connection.cursor()
+        try:
+            journal_mode = cursor.execute("PRAGMA journal_mode").fetchone()[0]
+            synchronous = cursor.execute("PRAGMA synchronous").fetchone()[0]
+            busy_timeout = cursor.execute("PRAGMA busy_timeout").fetchone()[0]
+            foreign_keys = cursor.execute("PRAGMA foreign_keys").fetchone()[0]
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+    assert journal_mode.lower() == "wal"
+    assert synchronous == 1
+    assert busy_timeout == 30000
+    assert foreign_keys == 1
 
 
 def test_settings_parse_free_provider_sources(monkeypatch) -> None:
@@ -196,7 +227,8 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "MODEL_OPTIMIZER_ENABLED: ${MODEL_OPTIMIZER_ENABLED:-true}" in text
     assert "MODEL_OPTIMIZER_CHECK_HOUR: ${MODEL_OPTIMIZER_CHECK_HOUR:-1}" in text
     assert "MODEL_OPTIMIZER_CHECK_MINUTE: ${MODEL_OPTIMIZER_CHECK_MINUTE:-20}" in text
-    assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED: ${MODEL_OPTIMIZER_AUTO_APPLY_ENABLED:-false}" in text
+    assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED: ${MODEL_OPTIMIZER_AUTO_APPLY_ENABLED:-true}" in text
+    assert "MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES: ${MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES:-100}" in text
 
 
 def test_env_example_contains_triggered_alert_settings() -> None:
@@ -207,8 +239,8 @@ def test_env_example_contains_triggered_alert_settings() -> None:
     assert "TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json" in text
     assert "MODEL_OPTIMIZER_ENABLED=true" in text
     assert "MODEL_OPTIMIZER_MANUAL_MIN_SAMPLES=20" in text
-    assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=false" in text
-    assert "MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES=50" in text
+    assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=true" in text
+    assert "MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES=100" in text
 
 
 def test_docker_compose_allows_free_provider_leagues_env_override() -> None:
@@ -289,6 +321,75 @@ def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     assert result.market_prediction.total_goals.market_available is True
     assert result.market_prediction.handicap.market_available is True
     assert result.to_dict()["market_prediction"]["score"]["text"] == result.market_prediction.score.text
+
+
+def test_data_sync_commits_successful_fixtures_and_rolls_back_failed_one(monkeypatch) -> None:
+    calls: list[str] = []
+    fixtures = [
+        SimpleNamespace(id="ok-1"),
+        SimpleNamespace(id="bad"),
+        SimpleNamespace(id="ok-2"),
+    ]
+
+    class FakeDataHub:
+        provider = SimpleNamespace(name="fake-provider")
+
+        def get_today_fixtures(self) -> list[SimpleNamespace]:
+            return fixtures
+
+    class FakeSession:
+        current_fixture_id: str | None = None
+
+        def __enter__(self) -> "FakeSession":
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def flush(self) -> None:
+            calls.append(f"flush:{self.current_fixture_id}")
+            if self.current_fixture_id == "bad":
+                raise RuntimeError("simulated fixture write failure")
+
+        def commit(self) -> None:
+            calls.append("commit")
+
+        def rollback(self) -> None:
+            calls.append("rollback")
+
+    class FakeRepository:
+        def __init__(self, session: FakeSession) -> None:
+            self.session = session
+
+        def upsert_fixture(self, fixture: SimpleNamespace) -> SimpleNamespace:
+            self.session.current_fixture_id = fixture.id
+            calls.append(f"upsert:{fixture.id}")
+            return SimpleNamespace(id=fixture.id)
+
+        def add_sync_log(self, **kwargs) -> None:
+            calls.append(f"sync-log:{kwargs['status']}")
+
+    monkeypatch.setattr(data_sync_engine, "SessionLocal", FakeSession)
+    monkeypatch.setattr(data_sync_engine, "SportsRepository", FakeRepository)
+
+    summary = data_sync_engine.DataSync(FakeDataHub()).sync_today()
+
+    assert summary.synced_count == 2
+    assert summary.failed_count == 1
+    assert summary.status == "partial"
+    assert calls == [
+        "upsert:ok-1",
+        "flush:ok-1",
+        "commit",
+        "upsert:bad",
+        "flush:bad",
+        "rollback",
+        "upsert:ok-2",
+        "flush:ok-2",
+        "commit",
+        "sync-log:partial",
+        "commit",
+    ]
 
 
 def test_prediction_archive_persists_prediction_result(mock_pipeline) -> None:

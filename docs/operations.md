@@ -27,9 +27,14 @@ Prediction/evaluation loop:
 - Successful Telegram alerts also archive the delivered prediction snapshot.
 - Finished fixtures are settled to `match_results` by the post-match collector.
 - The post-match collector scans recent archived predictions that are still unsettled.
+- SQLite runs with WAL mode, a 30 second busy timeout and per-fixture commits
+  during sync to reduce write-lock contention between scheduled jobs.
 - Evaluation creates `learning_records` and writes `reports/daily_report.md`.
-- The model optimizer check writes `reports/model_optimizer_status.json` and does
-  not auto-apply weights unless `MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=true`.
+- The model optimizer check writes `reports/model_optimizer_status.json` and
+  auto-applies weight suggestions by default once at least
+  `MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES=100` settled samples are available.
+  Set `MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=false` to require Dashboard/manual
+  review before applying weights.
 
 Default automation schedule, Asia/Shanghai:
 
@@ -39,7 +44,8 @@ Default automation schedule, Asia/Shanghai:
 - Every `5` minutes refresh live fixtures and check Telegram recommendation alerts.
 - `23:30` save results and settle recent archived predictions.
 - `01:00` generate the daily review report.
-- `01:20` check model optimizer suggestions in observe/manual-review mode.
+- `01:20` check model optimizer suggestions and auto-apply when the configured
+  sample gate is reached.
 
 Manual report generation inside the API container:
 

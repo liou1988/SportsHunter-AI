@@ -285,8 +285,8 @@ class Settings(BaseSettings):
     model_optimizer_check_hour: int = 1
     model_optimizer_check_minute: int = 20
     model_optimizer_manual_min_samples: int = 20
-    model_optimizer_auto_apply_enabled: bool = False
-    model_optimizer_auto_apply_min_samples: int = 50
+    model_optimizer_auto_apply_enabled: bool = True
+    model_optimizer_auto_apply_min_samples: int = 100
     model_optimizer_status_path: Path = Path("reports/model_optimizer_status.json")
     reports_dir: Path = Path("reports")
     system_status_path: Path = Path("system_status.md")
