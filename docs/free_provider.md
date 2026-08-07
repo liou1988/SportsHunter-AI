@@ -18,6 +18,13 @@ replacing the free fixture feed:
 - `ODDS_AGGREGATOR_PROVIDER=api_football`
 - `API_FOOTBALL_KEY=<your API-Football key>`
 - `API_FOOTBALL_LIVE_ODDS_ENABLED=true`
+- `API_FOOTBALL_LIVE_INCLUDE_PREMATCH=false` avoids spending an extra pre-match
+  request for every live fixture.
+- `API_FOOTBALL_PREMATCH_WINDOW_MINUTES=90` only requests API-Football pre-match
+  odds when kickoff is near.
+- `API_FOOTBALL_PREMATCH_CACHE_TTL_SECONDS=1800` and
+  `API_FOOTBALL_LIVE_CACHE_TTL_SECONDS=300` reuse recent API-Football odds across
+  scheduler/API calls.
 - `API_FOOTBALL_BOOKMAKER_IDS=` optionally narrows to specific bookmaker IDs.
 - `API_FOOTBALL_BET_IDS=` optionally narrows to specific bet IDs.
 - `API_FOOTBALL_ODDS_MAX_PAGES=1` keeps the free plan quota conservative; raise
@@ -32,8 +39,10 @@ The previous The Odds API adapter remains available as an alternative:
 
 When API-Football is enabled, `get_odds` first matches the ESPN/TheSportsDB
 fixture to API-Football's fixture ID by team names and kickoff time, then pulls
-pre-match odds from `/odds`. For live fixtures it also pulls `/odds/live` before
-pre-match odds so in-play prices are preferred when available. The adapter maps
+pre-match odds from `/odds` only inside the configured kickoff window. For live
+fixtures it pulls `/odds/live` so in-play prices are preferred when available.
+If API-Football reports the daily request limit has been reached, the adapter
+suppresses further API-Football requests until the next UTC reset. The adapter maps
 Match Winner, Goals Over/Under and Asian Handicap style bets into the existing
 European, totals and Asian handicap markets, then prepends those bookmaker odds
 ahead of ESPN `pickcenter` odds. This keeps prediction behavior unchanged when

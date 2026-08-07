@@ -33,9 +33,11 @@ Prediction/evaluation loop:
 - Odds can be supplemented from API-Football when
   `ODDS_AGGREGATOR_ENABLED=true`, `ODDS_AGGREGATOR_PROVIDER=api_football` and
   `API_FOOTBALL_KEY` are configured. External bookmaker odds are preferred over
-  ESPN odds for the same prediction call. For live fixtures, API-Football
-  `/odds/live` is queried before `/odds`, and live refreshes continue to archive
-  snapshots every five minutes.
+  ESPN odds for the same prediction call. To protect the free daily quota,
+  API-Football pre-match odds are only requested inside
+  `API_FOOTBALL_PREMATCH_WINDOW_MINUTES`, live fixtures use `/odds/live` without
+  an extra pre-match request by default, and daily request-limit responses
+  suppress further API-Football calls until the next UTC reset.
 - Today recommendations are archived to `predictions` with deduped snapshots.
 - Successful Telegram alerts also archive the delivered prediction snapshot.
 - Finished fixtures are settled to `match_results` by the post-match collector.

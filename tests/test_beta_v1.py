@@ -22,9 +22,11 @@ from database.repositories import DashboardRepository, SportsRepository
 from database.session import _configure_sqlite_connection, _engine_kwargs
 from datahub.hub import DataHub
 from datahub.models import Fixture, FixtureStatus, League, Odds, OddsMarket, Score, Standing, Team
+from datahub.odds_aggregator import ApiFootballOddsProvider
 from datahub.providers.mock import MockProvider
 from data_sync import engine as data_sync_engine
 from data_sync.models import SyncSummary
+from core.rating.engine import HunterRatingEngine
 from core.risk.models import RiskBreakdown, RiskLevel, RiskReason
 from core.signal.models import Signal
 from core.signal.rules import decide_signal
@@ -165,6 +167,11 @@ def test_settings_parse_api_football_odds_config(monkeypatch) -> None:
     monkeypatch.setenv("ODDS_AGGREGATOR_PROVIDER", "api_football")
     monkeypatch.setenv("API_FOOTBALL_KEY", "test-key")
     monkeypatch.setenv("API_FOOTBALL_LIVE_ODDS_ENABLED", "false")
+    monkeypatch.setenv("API_FOOTBALL_LIVE_INCLUDE_PREMATCH", "true")
+    monkeypatch.setenv("API_FOOTBALL_PREMATCH_WINDOW_MINUTES", "75")
+    monkeypatch.setenv("API_FOOTBALL_PREMATCH_GRACE_MINUTES", "5")
+    monkeypatch.setenv("API_FOOTBALL_PREMATCH_CACHE_TTL_SECONDS", "1200")
+    monkeypatch.setenv("API_FOOTBALL_LIVE_CACHE_TTL_SECONDS", "180")
     monkeypatch.setenv("API_FOOTBALL_BOOKMAKER_IDS", "6,8")
     monkeypatch.setenv("API_FOOTBALL_BET_IDS", "1,4,5")
     monkeypatch.setenv("API_FOOTBALL_ODDS_MAX_PAGES", "2")
@@ -173,6 +180,11 @@ def test_settings_parse_api_football_odds_config(monkeypatch) -> None:
     assert settings.odds_aggregator_provider == "api_football"
     assert settings.api_football_key == "test-key"
     assert settings.api_football_live_odds_enabled is False
+    assert settings.api_football_live_include_prematch is True
+    assert settings.api_football_prematch_window_minutes == 75
+    assert settings.api_football_prematch_grace_minutes == 5
+    assert settings.api_football_prematch_cache_ttl_seconds == 1200
+    assert settings.api_football_live_cache_ttl_seconds == 180
     assert settings.api_football_bookmaker_ids == ["6", "8"]
     assert settings.api_football_bet_ids == ["1", "4", "5"]
     assert settings.api_football_odds_max_pages == 2
@@ -553,6 +565,8 @@ def test_feature_builder_missing_data_stays_neutral() -> None:
     assert vector.features["home_advantage"] == 56.0
     assert "odds_unavailable" in vector.warnings
     assert "statistics_unavailable" in vector.warnings
+    assert "standings_unavailable" in vector.warnings
+    assert HunterRatingEngine().score(vector).confidence <= 0.55
 
 
 def test_feature_builder_uses_standings_when_statistics_are_missing() -> None:
@@ -2413,6 +2427,7 @@ def test_free_provider_prepends_the_odds_api_bookmaker_odds() -> None:
 
 
 def test_free_provider_prepends_api_football_bookmaker_odds() -> None:
+    ApiFootballOddsProvider.clear_shared_state()
     captured_calls: list[tuple[str, dict[str, str]]] = []
 
     class FakeJsonClient:
@@ -2443,6 +2458,7 @@ def test_free_provider_prepends_api_football_bookmaker_odds() -> None:
     provider = FreeFootballProvider(settings)
     provider.client = FakeJsonClient()
     assert provider.odds_aggregator is not None
+    provider.odds_aggregator.now = lambda: datetime(2026, 7, 26, 11, 0, tzinfo=timezone.utc)
     provider.odds_aggregator.client = FakeApiFootballClient()
 
     odds = provider.get_odds("odds-1")
@@ -2466,6 +2482,114 @@ def test_free_provider_prepends_api_football_bookmaker_odds() -> None:
     assert odds[3].provider == "free"
     assert captured_calls[0] == ("/fixtures", {"date": "2026-07-26", "timezone": "UTC"})
     assert captured_calls[1] == ("/odds", {"fixture": "1001"})
+
+
+def test_api_football_skips_far_prematch_odds() -> None:
+    ApiFootballOddsProvider.clear_shared_state()
+    calls: list[str] = []
+    now = datetime(2026, 8, 7, 8, 0, tzinfo=timezone.utc)
+    fixture = Fixture(
+        id="far-fixture",
+        league=League(id="eng.1", name="Premier League"),
+        home_team=Team(id="home", name="Home"),
+        away_team=Team(id="away", name="Away"),
+        start_time=now + timedelta(hours=4),
+        status=FixtureStatus.SCHEDULED,
+    )
+
+    class FakeApiFootballClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            calls.append(path)
+            return {}
+
+    provider = ApiFootballOddsProvider(
+        Settings(
+            odds_aggregator_enabled=True,
+            odds_aggregator_provider="api_football",
+            api_football_key="test-key",
+            api_football_prematch_window_minutes=90,
+            _env_file=None,
+        ),
+        client=FakeApiFootballClient(),
+    )
+    provider.now = lambda: now
+
+    assert provider.get_odds(fixture) == []
+    assert calls == []
+
+
+def test_api_football_caches_near_prematch_odds() -> None:
+    ApiFootballOddsProvider.clear_shared_state()
+    calls: list[str] = []
+    now = datetime(2026, 7, 26, 11, 0, tzinfo=timezone.utc)
+    fixture = Fixture(
+        id="odds-1",
+        league=League(id="eng.1", name="Premier League"),
+        home_team=Team(id="home", name="eng.1 Home odds-1"),
+        away_team=Team(id="away", name="eng.1 Away odds-1"),
+        start_time=datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc),
+        status=FixtureStatus.SCHEDULED,
+    )
+
+    class FakeApiFootballClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            calls.append(path)
+            if path == "/fixtures":
+                return _api_football_fixtures_payload()
+            if path == "/odds":
+                return _api_football_odds_payload()
+            raise AssertionError(path)
+
+    provider = ApiFootballOddsProvider(
+        Settings(
+            odds_aggregator_enabled=True,
+            odds_aggregator_provider="api_football",
+            api_football_key="test-key",
+            api_football_prematch_cache_ttl_seconds=1800,
+            _env_file=None,
+        ),
+        client=FakeApiFootballClient(),
+    )
+    provider.now = lambda: now
+
+    assert provider.get_odds(fixture)
+    assert provider.get_odds(fixture)
+    assert calls == ["/fixtures", "/odds"]
+
+
+def test_api_football_quota_error_suppresses_followup_requests() -> None:
+    ApiFootballOddsProvider.clear_shared_state()
+    calls: list[str] = []
+    now = datetime(2026, 8, 7, 8, 0, tzinfo=timezone.utc)
+    fixture = Fixture(
+        id="quota-fixture",
+        league=League(id="eng.1", name="Premier League"),
+        home_team=Team(id="home", name="Home"),
+        away_team=Team(id="away", name="Away"),
+        start_time=now + timedelta(minutes=30),
+        status=FixtureStatus.SCHEDULED,
+    )
+
+    class FakeApiFootballClient:
+        def get_json(self, path: str, params: dict | None = None) -> dict:
+            calls.append(path)
+            return {"errors": {"requests": "You have reached the request limit for the day"}}
+
+    provider = ApiFootballOddsProvider(
+        Settings(
+            odds_aggregator_enabled=True,
+            odds_aggregator_provider="api_football",
+            api_football_key="test-key",
+            _env_file=None,
+        ),
+        client=FakeApiFootballClient(),
+    )
+    provider.now = lambda: now
+
+    assert provider.get_odds(fixture) == []
+    assert provider.get_odds(fixture) == []
+    assert calls == ["/fixtures"]
+    ApiFootballOddsProvider.clear_shared_state()
 
 
 def test_free_provider_today_aggregates_supplemental_sources_and_deduplicates() -> None:

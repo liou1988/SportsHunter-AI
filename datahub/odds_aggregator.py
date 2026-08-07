@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Callable
 
 from config.settings import Settings
 from datahub.http_client import HttpJsonClient
@@ -61,19 +61,28 @@ THE_ODDS_API_SPORT_KEYS = {
 
 class ApiFootballOddsProvider:
     name = "api_football"
+    _fixtures_by_date_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
+    _odds_cache: dict[tuple[str, str, int], tuple[datetime, list[Odds]]] = {}
+    _quota_blocked_until: datetime | None = None
 
     def __init__(self, settings: Settings, client: HttpJsonClient | None = None) -> None:
         self.settings = settings
         headers = {"x-apisports-key": str(settings.api_football_key)} if settings.api_football_key else {}
         self.client = client or HttpJsonClient(settings, settings.api_football_base_url, headers=headers)
-        self._fixtures_by_date_cache: dict[str, list[dict[str, Any]]] = {}
+        self.now = lambda: datetime.now(timezone.utc)
+
+    @classmethod
+    def clear_shared_state(cls) -> None:
+        cls._fixtures_by_date_cache.clear()
+        cls._odds_cache.clear()
+        cls._quota_blocked_until = None
 
     @property
     def enabled(self) -> bool:
         return bool(self.settings.odds_aggregator_enabled and self.settings.api_football_key)
 
     def get_odds(self, fixture: Fixture) -> list[Odds]:
-        if not self.enabled:
+        if not self.enabled or self._quota_blocked() or not self._fixture_is_requestable(fixture):
             return []
 
         api_fixture = self._match_fixture(fixture)
@@ -83,15 +92,34 @@ class ApiFootballOddsProvider:
 
         odds_items: list[Odds] = []
         if fixture.status == FixtureStatus.LIVE and self.settings.api_football_live_odds_enabled:
-            odds_items.extend(self._get_live_odds(fixture, api_fixture_id))
-        odds_items.extend(self._get_prematch_odds(fixture, api_fixture_id))
+            odds_items.extend(self._cached_odds(
+                ("live", fixture.id, api_fixture_id),
+                self.settings.api_football_live_cache_ttl_seconds,
+                lambda: self._get_live_odds(fixture, api_fixture_id),
+            ))
+            if self.settings.api_football_live_include_prematch:
+                odds_items.extend(self._cached_odds(
+                    ("prematch", fixture.id, api_fixture_id),
+                    self.settings.api_football_prematch_cache_ttl_seconds,
+                    lambda: self._get_prematch_odds(fixture, api_fixture_id),
+                ))
+            return odds_items
+
+        odds_items.extend(self._cached_odds(
+            ("prematch", fixture.id, api_fixture_id),
+            self.settings.api_football_prematch_cache_ttl_seconds,
+            lambda: self._get_prematch_odds(fixture, api_fixture_id),
+        ))
         return odds_items
 
     def _match_fixture(self, fixture: Fixture) -> dict[str, Any] | None:
         date_key = _as_utc(fixture.start_time).date().isoformat()
-        events = self._fixtures_by_date_cache.get(date_key)
-        if events is None:
-            payload = self.client.get_json(
+        cache_entry = self._fixtures_by_date_cache.get(date_key)
+        now = self._now()
+        if cache_entry is not None and cache_entry[0] > now:
+            events = cache_entry[1]
+        else:
+            payload = self._request_json(
                 "/fixtures",
                 params={
                     "date": date_key,
@@ -99,19 +127,19 @@ class ApiFootballOddsProvider:
                 },
             )
             events = _api_football_response_items(payload)
-            self._fixtures_by_date_cache[date_key] = events
+            self._fixtures_by_date_cache[date_key] = (now + timedelta(hours=6), events)
         return _best_api_football_fixture_match(fixture, events)
 
     def _get_prematch_odds(self, fixture: Fixture, api_fixture_id: int) -> list[Odds]:
         params = self._odds_params(api_fixture_id)
-        payload = self.client.get_json("/odds", params=params)
+        payload = self._request_json("/odds", params=params)
         odds_items: list[Odds] = []
         for event in _api_football_response_items(payload):
             odds_items.extend(_parse_api_football_prematch_event(fixture, event))
         max_pages = max(1, self.settings.api_football_odds_max_pages)
         total_pages = min(_api_football_total_pages(payload), max_pages)
         for page in range(2, total_pages + 1):
-            paged_payload = self.client.get_json("/odds", params={**params, "page": str(page)})
+            paged_payload = self._request_json("/odds", params={**params, "page": str(page)})
             for event in _api_football_response_items(paged_payload):
                 odds_items.extend(_parse_api_football_prematch_event(fixture, event))
         return odds_items
@@ -120,7 +148,7 @@ class ApiFootballOddsProvider:
         params = {"fixture": str(api_fixture_id)}
         if self.settings.api_football_bet_ids:
             params["bet"] = ",".join(self.settings.api_football_bet_ids)
-        payload = self.client.get_json("/odds/live", params=params)
+        payload = self._request_json("/odds/live", params=params)
         odds_items: list[Odds] = []
         for event in _api_football_response_items(payload):
             odds_items.extend(_parse_api_football_live_event(fixture, event))
@@ -133,6 +161,57 @@ class ApiFootballOddsProvider:
         if self.settings.api_football_bet_ids:
             params["bet"] = ",".join(self.settings.api_football_bet_ids)
         return params
+
+    def _request_json(self, path: str, params: dict[str, object] | None = None) -> dict[str, Any]:
+        if self._quota_blocked():
+            return {}
+        payload = self.client.get_json(path, params=params)
+        if _api_football_quota_exhausted(payload):
+            blocked_until = _next_utc_reset(self._now())
+            type(self)._quota_blocked_until = blocked_until
+            logger.warning(
+                "api-football quota exhausted; suppressing requests until reset",
+                extra={"blocked_until": blocked_until.isoformat()},
+            )
+        return payload
+
+    def _cached_odds(
+        self,
+        key: tuple[str, str, int],
+        ttl_seconds: int,
+        factory: Callable[[], list[Odds]],
+    ) -> list[Odds]:
+        now = self._now()
+        cached = self._odds_cache.get(key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+        value = factory()
+        self._odds_cache[key] = (now + timedelta(seconds=max(0, ttl_seconds)), value)
+        return value
+
+    def _fixture_is_requestable(self, fixture: Fixture) -> bool:
+        if fixture.status == FixtureStatus.LIVE:
+            return True
+        if fixture.status != FixtureStatus.SCHEDULED:
+            return False
+        minutes_to_kickoff = (_as_utc(fixture.start_time) - self._now()).total_seconds() / 60
+        return (
+            -self.settings.api_football_prematch_grace_minutes
+            <= minutes_to_kickoff
+            <= self.settings.api_football_prematch_window_minutes
+        )
+
+    def _quota_blocked(self) -> bool:
+        blocked_until = type(self)._quota_blocked_until
+        if blocked_until is None:
+            return False
+        if blocked_until <= self._now():
+            type(self)._quota_blocked_until = None
+            return False
+        return True
+
+    def _now(self) -> datetime:
+        return _as_utc(self.now())
 
 
 class TheOddsApiOddsProvider:
@@ -203,10 +282,24 @@ def sport_key_for_fixture(fixture: Fixture) -> str | None:
 def _api_football_response_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     errors = payload.get("errors") if isinstance(payload, dict) else None
     if errors:
-        logger.warning("api-football returned errors", extra={"errors": errors})
+        if not _api_football_quota_exhausted(payload):
+            logger.warning("api-football returned errors", extra={"errors": errors})
         return []
     response = payload.get("response", []) if isinstance(payload, dict) else []
     return response if isinstance(response, list) else []
+
+
+def _api_football_quota_exhausted(payload: dict[str, Any]) -> bool:
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if not errors:
+        return False
+    text = str(errors).casefold()
+    return "request limit" in text or "reached the request" in text or "quota" in text
+
+
+def _next_utc_reset(now: datetime) -> datetime:
+    tomorrow = (now + timedelta(days=1)).date()
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, 0, 5, tzinfo=timezone.utc)
 
 
 def _api_football_total_pages(payload: dict[str, Any]) -> int:

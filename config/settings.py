@@ -270,6 +270,11 @@ class Settings(BaseSettings):
     api_football_key: str | None = None
     api_football_base_url: str = "https://v3.football.api-sports.io"
     api_football_live_odds_enabled: bool = True
+    api_football_live_include_prematch: bool = False
+    api_football_prematch_window_minutes: int = 90
+    api_football_prematch_grace_minutes: int = 10
+    api_football_prematch_cache_ttl_seconds: int = 1800
+    api_football_live_cache_ttl_seconds: int = 300
     api_football_bookmaker_ids: list[str] = Field(default_factory=list)
     api_football_bet_ids: list[str] = Field(default_factory=list)
     api_football_odds_max_pages: int = 1
