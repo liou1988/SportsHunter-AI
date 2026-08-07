@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from config.settings import Settings, get_settings
 from datahub.models import OddsMarket, to_plain_dict
@@ -23,6 +24,9 @@ from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
 from telegram_bot.recommendations import _send_with_result, format_market_prediction_lines, format_reason_lines
 
 logger = logging.getLogger(__name__)
+
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+ALERT_FIXTURE_STATUSES = {"scheduled", "unknown"}
 
 
 @dataclass(slots=True)
@@ -208,10 +212,12 @@ class RecommendationAlertPusher:
 
     def _eligible_results(self, results: list[PredictionResult]) -> list[PredictionResult]:
         allowed = {str(signal).strip().upper() for signal in self.settings.telegram_alert_signals}
+        now = datetime.now(timezone.utc)
         candidates = [
             result
             for result in results
             if result.signal.signal.value in allowed and result.signal.stake > 0
+            and _is_unstarted_alert_fixture(result.fixture, now)
         ]
         return sorted(candidates, key=lambda result: result.hunter_score.score, reverse=True)
 
@@ -278,6 +284,28 @@ def _fixture_odds(pipeline: PredictionPipeline, fixture_id: str) -> dict | list:
     if european is not None:
         return to_plain_dict(european)
     return to_plain_dict(odds_items)
+
+
+def _is_unstarted_alert_fixture(fixture: Any, now: datetime | None = None) -> bool:
+    start_time = _as_utc(getattr(fixture, "start_time", None))
+    if start_time is None:
+        return False
+    now = _as_utc(now) or datetime.now(timezone.utc)
+    if start_time.astimezone(BEIJING_TZ).date() != now.astimezone(BEIJING_TZ).date():
+        return False
+    if start_time < now:
+        return False
+    raw_status = getattr(fixture, "status", "unknown")
+    status = str(getattr(raw_status, "value", raw_status)).lower()
+    return status in ALERT_FIXTURE_STATUSES
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _format_stake(stake: float) -> str:

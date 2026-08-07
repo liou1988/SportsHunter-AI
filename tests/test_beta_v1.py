@@ -2055,6 +2055,56 @@ def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None
     assert all("SportsHunter AI 发现合适比赛" in message for message in sent_messages)
 
 
+def test_telegram_alert_pusher_skips_already_started_matches(tmp_path) -> None:
+    import asyncio
+
+    sent_messages: list[str] = []
+    base_pipeline = _fake_recommendation_pipeline()
+    prediction_archive = _FakePredictionArchive()
+
+    class FakeNotifier:
+        async def send_message_with_result(self, text: str) -> TelegramSendResult:
+            sent_messages.append(text)
+            return TelegramSendResult(success=True, sent=True, message_id=len(sent_messages))
+
+    class MixedPipeline:
+        context = base_pipeline.context
+
+        def run_today(self) -> list:
+            results = base_pipeline.run_today()
+            results[0].fixture.start_time = _future_beijing_today_start()
+            results[0].fixture.status = FixtureStatus.SCHEDULED
+            results[1].fixture.start_time = _recent_beijing_today_start(minutes=5)
+            results[1].fixture.status = FixtureStatus.SCHEDULED
+            results[3].fixture.start_time = _recent_beijing_today_start(minutes=90)
+            results[3].fixture.status = FixtureStatus.LIVE
+            return results
+
+    settings = Settings(
+        data_provider="mock",
+        telegram_alert_signals=["STRONG_BUY", "BUY", "WATCH"],
+        telegram_alert_archive_path=tmp_path / "alerts.json",
+        _env_file=None,
+    )
+    pusher = RecommendationAlertPusher(
+        pipeline=MixedPipeline(),
+        notifier=FakeNotifier(),
+        archive=AlertArchive(settings.telegram_alert_archive_path),
+        prediction_archive=prediction_archive,
+        settings=settings,
+    )
+
+    result = asyncio.run(pusher.push_new())
+
+    assert result.success is True
+    assert result.sent is True
+    assert result.evaluated_count == 4
+    assert result.eligible_count == 1
+    assert result.pushed_count == 1
+    assert len(sent_messages) == 1
+    assert [item.fixture.id for item in prediction_archive.saved] == ["buy"]
+
+
 def test_telegram_alert_message_formats_single_prediction() -> None:
     pipeline = _fake_recommendation_pipeline()
     result = pipeline.run_today()[0]
