@@ -1,6 +1,8 @@
 const state = {
   loading: false,
   optimizer: null,
+  periodDays: 30,
+  periodOptions: [3, 7, 15, 30],
   recommendationItems: [],
   recommendationSort: "confidence",
   recommendationSignalFilter: "all",
@@ -23,7 +25,7 @@ async function refreshDashboard() {
   state.loading = true;
   setBusy(true);
   try {
-    const payload = await fetchJson("/api/dashboard/summary");
+    const payload = await fetchJson(`/api/dashboard/summary?period_days=${encodeURIComponent(state.periodDays)}`);
     renderSummary(payload);
   } catch (error) {
     setFooter(`刷新失败：${error.message}`);
@@ -34,9 +36,9 @@ async function refreshDashboard() {
 }
 
 async function runEvaluation() {
-  setFooter("\u6b63\u5728\u751f\u6210\u590d\u76d8\u62a5\u544a...");
+  setFooter(`正在生成近 ${state.periodDays} 天复盘报告...`);
   try {
-    const payload = await fetchJson("/api/dashboard/evaluation/run", { method: "POST" });
+    const payload = await fetchJson(`/api/dashboard/evaluation/run?period_days=${encodeURIComponent(state.periodDays)}`, { method: "POST" });
     renderEvaluationReport(payload.report || {});
     await refreshDashboard();
   } catch (error) {
@@ -97,6 +99,9 @@ function renderSummary(payload) {
   const analytics = payload.analytics || {};
   const optimizer = payload.model_optimizer || {};
   const counts = database.counts || {};
+  state.periodOptions = normalizePeriodOptions(payload.period_options || state.periodOptions);
+  state.periodDays = normalizePeriodDays(payload.period_days || analytics.period_days || state.periodDays);
+  renderPeriodControls();
 
   $("provider-health").textContent = translateHealth(provider.health);
   $("provider-health").className = statusClass(provider.health);
@@ -131,9 +136,48 @@ function renderSummary(payload) {
   renderAnalytics(analytics);
   renderOptimizer(optimizer);
 
-  const daily = reports.daily_report || {};
+  const daily = (reports.evaluation_report && reports.evaluation_report.content)
+    ? reports.evaluation_report
+    : (reports.daily_report || {});
   renderEvaluationReportFromMarkdown(daily.content || "");
   setFooter(`最后刷新：${formatTime(payload.generated_at)}`);
+}
+
+function normalizePeriodOptions(options) {
+  const values = (Array.isArray(options) ? options : [])
+    .map((value) => Number(value))
+    .filter((value) => [3, 7, 15, 30].includes(value));
+  return values.length ? [...new Set(values)] : [3, 7, 15, 30];
+}
+
+function normalizePeriodDays(value) {
+  const number = Number(value);
+  return state.periodOptions.includes(number) ? number : 30;
+}
+
+function renderPeriodControls() {
+  document.querySelectorAll("[data-period-control]").forEach((root) => {
+    root.innerHTML = state.periodOptions.map((days) => `
+      <button
+        class="period-button ${days === state.periodDays ? "active" : ""}"
+        type="button"
+        data-period-days="${days}"
+        aria-pressed="${days === state.periodDays ? "true" : "false"}"
+        title="近 ${days} 天"
+      >${days}天</button>
+    `).join("");
+  });
+  const summaryLink = $("dashboard-summary-link");
+  if (summaryLink) {
+    summaryLink.href = `/api/dashboard/summary?period_days=${encodeURIComponent(state.periodDays)}`;
+  }
+}
+
+function updatePeriodCaptions(periodDays) {
+  const caption = $("model-performance-caption");
+  if (caption) {
+    caption.textContent = `近 ${periodDays} 天已结算推荐的命中率、收益和信心校准`;
+  }
 }
 
 
@@ -357,6 +401,8 @@ function renderOptimizer(payload) {
 
 function renderAnalytics(analytics) {
   const performance = analytics.performance || {};
+  const periodDays = Number(performance.period_days || analytics.period_days || state.periodDays);
+  updatePeriodCaptions(periodDays);
   $("settled-count").textContent = performance.settled_count ?? "--";
   $("hit-rate").textContent = formatPercent(performance.hit_rate);
   $("roi").textContent = formatPercent(performance.roi);
@@ -394,9 +440,11 @@ function renderTrend(items) {
   const root = $("prediction-trend");
   root.classList.toggle("empty-state", !items.length);
   if (!items.length) {
+    root.style.gridTemplateColumns = "";
     root.innerHTML = `<p class="muted">暂无趋势数据。</p>`;
     return;
   }
+  root.style.gridTemplateColumns = `repeat(${items.length}, minmax(18px, 1fr))`;
   const max = Math.max(1, ...items.map((item) => Number(item.count || 0)));
   root.innerHTML = items.map((item) => {
     const height = Math.max(6, Math.round((Number(item.count || 0) / max) * 96));
@@ -1002,6 +1050,19 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function handlePeriodControlClick(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const button = target.closest("[data-period-days]");
+  if (!button) return;
+  const nextPeriod = Number(button.dataset.periodDays);
+  if (!state.periodOptions.includes(nextPeriod) || nextPeriod === state.periodDays) return;
+  state.periodDays = nextPeriod;
+  renderPeriodControls();
+  refreshDashboard();
+}
+
+document.addEventListener("click", handlePeriodControlClick);
 $("refresh-button").addEventListener("click", refreshDashboard);
 $("data-quality-button").addEventListener("click", checkDataQuality);
 $("evaluation-button").addEventListener("click", runEvaluation);
@@ -1024,4 +1085,5 @@ $("recommendation-time-filter").addEventListener("change", (event) => {
   renderRecommendations(state.recommendationItems);
 });
 $("recommendation-export-button").addEventListener("click", exportCurrentRecommendations);
+renderPeriodControls();
 refreshDashboard();

@@ -1244,6 +1244,16 @@ def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path
     assert report.confidence_notes
     assert (tmp_path / "daily_report.md").exists()
 
+    period_report = EvaluationRunner(
+        dataset=EvaluationDataset(session_factory=Session),
+        reports_dir=tmp_path,
+    ).run_for_days(7)
+    assert period_report.period == "last_7_days"
+    assert period_report.settled_count == 1
+    assert period_report.learning_records_created == 0
+    assert "# SportsHunter-AI \u8fd17\u5929" in period_report.to_markdown()
+    assert (tmp_path / "last_7_days_report.md").exists()
+
 
 def test_evaluation_dataset_uses_latest_prediction_per_fixture(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
@@ -1271,6 +1281,15 @@ def test_evaluation_dataset_uses_latest_prediction_per_fixture(mock_pipeline) ->
 
     assert len(rows) == 1
     assert rows[0]["prediction_id"] == second_id
+
+    with Session() as session:
+        saved_result = session.scalar(select(MatchResult))
+        assert saved_result is not None
+        saved_result.settled_at = datetime.now(timezone.utc) - timedelta(days=5)
+        session.commit()
+
+    assert EvaluationDataset(session_factory=Session).rows_for_days(3) == []
+    assert len(EvaluationDataset(session_factory=Session).rows_for_days(7)) == 1
 
 
 def test_settlement_scans_pending_archived_predictions(mock_pipeline) -> None:
@@ -1524,7 +1543,10 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "recommendation-time-filter" in response.text
     assert "recommendation-export-button" in response.text
     assert "beijingToday" in response.text
-    assert "20260801-beijingtoday" in response.text
+    assert "period-control" in response.text
+    assert "model-performance-caption" in response.text
+    assert "dashboard-summary-link" in response.text
+    assert "20260807-period-stats" in response.text
     assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
@@ -1574,6 +1596,24 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert "model_optimizer" in payload
     assert "suggestions" in payload["model_optimizer"]
     assert "reports" in payload
+    assert payload["period_days"] == 30
+    assert payload["period_options"] == [3, 7, 15, 30]
+    assert payload["analytics"]["period_days"] == 30
+    assert payload["analytics"]["performance"]["period_days"] == 30
+    assert payload["reports"]["period_days"] == 30
+
+    app.dependency_overrides[dashboard_get_datahub] = lambda: DataHub(MockProvider(mock_settings))
+    try:
+        response = TestClient(app).get("/api/dashboard/summary?period_days=7")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["period_days"] == 7
+    assert payload["analytics"]["period_days"] == 7
+    assert payload["analytics"]["performance"]["period_days"] == 7
+    assert payload["reports"]["period_days"] == 7
 
 
 def test_model_optimizer_api_returns_structured_payload() -> None:
@@ -2121,6 +2161,18 @@ def test_dashboard_frontend_shows_recommendation_summary() -> None:
     assert "itemMatchText" in script
 
 
+def test_dashboard_frontend_exposes_period_stats_controls() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+    template = Path("dashboard/templates/index.html").read_text(encoding="utf-8")
+
+    assert 'data-period-control="analytics"' in template
+    assert 'data-period-control="evaluation"' in template
+    assert 'id="dashboard-summary-link"' in template
+    assert "function renderPeriodControls" in script
+    assert "period_days=${encodeURIComponent(state.periodDays)}" in script
+    assert "handlePeriodControlClick" in script
+
+
 def test_dashboard_frontend_shows_kickoff_distance() -> None:
     script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
 
@@ -2150,7 +2202,7 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260801-beijingtoday" in template
+    assert "20260807-period-stats" in template
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))

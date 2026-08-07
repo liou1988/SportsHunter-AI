@@ -54,8 +54,9 @@
         <div class="panel-head">
           <div>
             <h2>模型表现</h2>
-            <p>近 30 天已结算推荐的命中率、收益和信心校准</p>
+            <p id="model-performance-caption">近 30 天已结算推荐的命中率、收益和信心校准</p>
           </div>
+          <div class="period-control" data-period-control="analytics" aria-label="统计周期"></div>
         </div>
         <div class="kpi-grid">
           <div class="kpi-cell">
@@ -103,6 +104,7 @@
             <h2>联赛表现</h2>
             <p>按已结算样本统计命中率</p>
           </div>
+          <div class="period-control" data-period-control="analytics" aria-label="统计周期"></div>
         </div>
         <div id="league-performance" class="rank-list"></div>
       </section>
@@ -113,6 +115,7 @@
             <h2>盘口表现</h2>
             <p>胜平负、大小球、让球命中情况</p>
           </div>
+          <div class="period-control" data-period-control="analytics" aria-label="统计周期"></div>
         </div>
         <div id="market-performance" class="bar-list padded-list"></div>
       </section>
@@ -278,7 +281,10 @@
             <h2>自动复盘</h2>
             <p>已结算比赛的命中率、盘口表现和调整建议</p>
           </div>
-          <a href="/api/dashboard/summary" target="_blank" rel="noreferrer">看板接口</a>
+          <div class="panel-actions">
+            <div class="period-control" data-period-control="evaluation" aria-label="复盘周期"></div>
+            <a id="dashboard-summary-link" href="/api/dashboard/summary?period_days=30" target="_blank" rel="noreferrer">看板接口</a>
+          </div>
         </div>
         <div id="daily-report" class="review-report">
           <p class="muted">暂无复盘报告</p>
@@ -288,6 +294,6 @@
 
     <footer id="last-updated">等待刷新</footer>
   </main>
-  <script src="/dashboard/static/app.js?v=20260801-beijingtoday"></script>
+  <script src="/dashboard/static/app.js?v=20260807-period-stats"></script>
 </body>
 </html>

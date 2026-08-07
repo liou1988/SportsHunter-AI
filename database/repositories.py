@@ -402,7 +402,7 @@ class DashboardRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def summary(self) -> dict:
+    def summary(self, days: int = 30) -> dict:
         return {
             "counts": {
                 "fixtures": self._count(orm.Fixture),
@@ -412,7 +412,7 @@ class DashboardRepository:
                 "odds_snapshots": self._count(orm.OddsSnapshot),
             },
             "latest_predictions": self.latest_predictions(),
-            "analytics": self.analytics(),
+            "analytics": self.analytics(days=days),
         }
 
     def latest_predictions(self, limit: int = 80) -> list[dict]:
@@ -464,6 +464,7 @@ class DashboardRepository:
         return items
 
     def analytics(self, days: int = 30) -> dict:
+        days = max(1, int(days))
         since = datetime.now(timezone.utc) - timedelta(days=days)
         predictions = list(
             self.session.scalars(
@@ -474,7 +475,7 @@ class DashboardRepository:
         )
         return {
             "period_days": days,
-            "prediction_trend": self._prediction_trend(predictions, days=14),
+            "prediction_trend": self._prediction_trend(predictions, days=days),
             "signal_distribution": self._signal_distribution(predictions),
             "risk_distribution": self._risk_distribution(predictions),
             "score_buckets": self._score_buckets(predictions),

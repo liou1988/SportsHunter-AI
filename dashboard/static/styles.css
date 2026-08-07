@@ -192,6 +192,33 @@ a {
   justify-content: flex-end;
 }
 
+.period-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #dbe4ec;
+  border-radius: 6px;
+  background: #f5f8fa;
+  white-space: nowrap;
+}
+
+.period-button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #52616f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.period-button.active {
+  background: #2b6f6a;
+  color: #fff;
+}
+
 .sort-control,
 .filter-control {
   display: inline-flex;
@@ -424,6 +451,7 @@ dt {
   align-items: end;
   gap: 6px;
   min-height: 132px;
+  overflow-x: auto;
 }
 
 .trend-chart.empty-state {

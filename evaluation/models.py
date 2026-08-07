@@ -111,11 +111,16 @@ def _format_optional_percent(value: float | None) -> str:
 
 
 def _period_label(period: str) -> str:
+    period_text = str(period)
+    if period_text.startswith("last_") and period_text.endswith("_days"):
+        days = period_text.removeprefix("last_").removesuffix("_days")
+        if days.isdigit():
+            return f"\u8fd1{days}\u5929"
     return {
         "daily": "每日",
         "weekly": "每周",
         "monthly": "每月",
-    }.get(str(period), str(period))
+    }.get(period_text, period_text)
 
 
 def _translate_metric_name(name: str) -> str:

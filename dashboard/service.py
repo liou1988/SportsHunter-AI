@@ -27,32 +27,46 @@ from telegram_bot.localization import (
 
 logger = logging.getLogger(__name__)
 
+STAT_PERIOD_OPTIONS = (3, 7, 15, 30)
+DEFAULT_STAT_PERIOD_DAYS = 30
+
 
 def build_dashboard_summary(
     datahub: DataHub,
     pipeline: PredictionPipeline | None = None,
     settings: Settings | None = None,
+    period_days: int = DEFAULT_STAT_PERIOD_DAYS,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
-    database = _database_status()
+    period_days = _normalize_period_days(period_days)
+    database = _database_status(period_days)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "period_days": period_days,
+        "period_options": list(STAT_PERIOD_OPTIONS),
         "provider": _provider_status(datahub),
         "database": database,
         "recommendations": _archived_recommendation_status(database),
-        "analytics": _analytics_status(database),
+        "analytics": _analytics_status(database, period_days),
         "model_optimizer": model_optimizer_status(),
-        "reports": _report_status(settings),
+        "reports": _report_status(settings, period_days),
     }
 
 
-def run_daily_evaluation(settings: Settings | None = None) -> dict[str, Any]:
+def run_daily_evaluation(
+    settings: Settings | None = None,
+    period_days: int = DEFAULT_STAT_PERIOD_DAYS,
+) -> dict[str, Any]:
     settings = settings or get_settings()
-    report = EvaluationRunner(reports_dir=settings.reports_dir).daily()
+    period_days = _normalize_period_days(period_days)
+    report = EvaluationRunner(reports_dir=settings.reports_dir).run_for_days(period_days)
     return {
         "success": True,
+        "period_days": period_days,
+        "period_options": list(STAT_PERIOD_OPTIONS),
         "report": {
             "period": report.period,
+            "period_days": period_days,
             "date": report.report_date.isoformat(),
             "settled_count": report.settled_count,
             "learning_records_created": report.learning_records_created,
@@ -83,6 +97,14 @@ def model_optimizer_status() -> dict[str, Any]:
 
 def apply_model_optimizer() -> dict[str, Any]:
     return ModelOptimizer().apply("monthly")
+
+
+def _normalize_period_days(period_days: int | str | None) -> int:
+    try:
+        value = int(period_days or DEFAULT_STAT_PERIOD_DAYS)
+    except (TypeError, ValueError):
+        return DEFAULT_STAT_PERIOD_DAYS
+    return value if value in STAT_PERIOD_OPTIONS else DEFAULT_STAT_PERIOD_DAYS
 
 
 def check_data_quality(datahub: DataHub, max_odds_fixtures: int = 12) -> dict[str, Any]:
@@ -175,10 +197,10 @@ def _provider_status(datahub: DataHub) -> dict[str, Any]:
         return {"provider": "unknown", "health": "down", "last_update": None, "latency": None, "error": str(exc)}
 
 
-def _database_status() -> dict[str, Any]:
+def _database_status(period_days: int) -> dict[str, Any]:
     try:
         with SessionLocal() as session:
-            summary = DashboardRepository(session).summary()
+            summary = DashboardRepository(session).summary(days=period_days)
         summary["latest_predictions"] = [_localize_prediction_item(item) for item in summary.get("latest_predictions", [])]
         summary["analytics"] = _localize_analytics(summary.get("analytics", {}))
         return {"health": "ok", "error": None, **summary}
@@ -189,7 +211,7 @@ def _database_status() -> dict[str, Any]:
             "error": str(exc),
             "counts": {},
             "latest_predictions": [],
-            "analytics": _empty_analytics(),
+            "analytics": _empty_analytics(period_days),
         }
 
 
@@ -236,22 +258,29 @@ def _unique_dashboard_recommendations(items: list[dict[str, Any]]) -> list[dict[
     return unique
 
 
-def _report_status(settings: Settings) -> dict[str, Any]:
+def _report_status(settings: Settings, period_days: int) -> dict[str, Any]:
     daily_path = settings.reports_dir / "daily_report.md"
+    period_path = settings.reports_dir / f"last_{period_days}_days_report.md"
+    period_payload = _file_payload(period_path)
+    if not period_payload.get("exists"):
+        period_payload = _file_payload(daily_path)
     return {
+        "period_days": period_days,
+        "evaluation_report": period_payload,
         "daily_report": _file_payload(daily_path),
         "system_status": _file_payload(settings.system_status_path),
     }
 
 
-def _analytics_status(database: dict[str, Any]) -> dict[str, Any]:
-    analytics = {**_empty_analytics(), **dict(database.get("analytics") or {})}
+def _analytics_status(database: dict[str, Any], period_days: int) -> dict[str, Any]:
+    analytics = {**_empty_analytics(period_days), **dict(database.get("analytics") or {})}
+    analytics["period_days"] = period_days
     try:
-        rows = EvaluationDataset().rows("monthly")
-        analytics["performance"] = _performance_snapshot(rows)
+        rows = EvaluationDataset().rows_for_days(period_days)
+        analytics["performance"] = _performance_snapshot(rows, period_days)
     except Exception as exc:  # noqa: BLE001 - dashboard can still show operational status
         logger.warning("dashboard performance analytics unavailable: %s", exc)
-        analytics["performance"] = _empty_performance()
+        analytics["performance"] = _empty_performance(period_days)
         analytics["error"] = str(exc)
     return analytics
 
@@ -277,7 +306,7 @@ def _localize_analytics(analytics: dict[str, Any]) -> dict[str, Any]:
     return localized
 
 
-def _performance_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _performance_snapshot(rows: list[dict[str, Any]], period_days: int) -> dict[str, Any]:
     metrics = calculate_metrics(rows)
     actionable_rows = [row for row in rows if row.get("actionable", True)]
     scored_rows = actionable_rows or rows
@@ -286,7 +315,8 @@ def _performance_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     avg_confidence = _average([row.get("confidence") for row in scored_rows])
     avg_hunter_score = _average([row.get("hunter_score") for row in scored_rows])
     return {
-        "period": "monthly",
+        "period": f"last_{period_days}_days",
+        "period_days": period_days,
         "settled_count": len(rows),
         "actionable_count": len(actionable_rows),
         "wins": wins,
@@ -304,9 +334,10 @@ def _performance_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _empty_performance() -> dict[str, Any]:
+def _empty_performance(period_days: int = DEFAULT_STAT_PERIOD_DAYS) -> dict[str, Any]:
     return {
-        "period": "monthly",
+        "period": f"last_{period_days}_days",
+        "period_days": period_days,
         "settled_count": 0,
         "actionable_count": 0,
         "wins": 0,
@@ -324,9 +355,9 @@ def _empty_performance() -> dict[str, Any]:
     }
 
 
-def _empty_analytics() -> dict[str, Any]:
+def _empty_analytics(period_days: int = DEFAULT_STAT_PERIOD_DAYS) -> dict[str, Any]:
     return {
-        "period_days": 30,
+        "period_days": period_days,
         "prediction_trend": [],
         "signal_distribution": [],
         "risk_distribution": [],

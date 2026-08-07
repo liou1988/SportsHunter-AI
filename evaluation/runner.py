@@ -38,6 +38,10 @@ class EvaluationRunner:
         self.writer.write(report)
         return report
 
+    def run_for_days(self, days: int) -> EvaluationReport:
+        days = max(1, int(days))
+        return self.run(f"last_{days}_days", rows=self.dataset.rows_for_days(days))
+
     def daily(self) -> EvaluationReport:
         return self.run("daily")
 

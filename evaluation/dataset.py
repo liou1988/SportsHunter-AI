@@ -25,7 +25,10 @@ class EvaluationDataset:
         self.session_factory = session_factory
 
     def rows(self, period: str = "daily") -> list[dict]:
-        since = datetime.now(timezone.utc) - timedelta(days=PERIOD_DAYS.get(period, 1))
+        return self.rows_for_days(PERIOD_DAYS.get(period, 1))
+
+    def rows_for_days(self, days: int) -> list[dict]:
+        since = datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
         with self.session_factory() as session:
             repo = SportsRepository(session)
             settled = repo.settled_predictions(since=since)
@@ -266,4 +269,3 @@ def _learning_module_label(module: str) -> str:
         "injury": "\u4f24\u505c\u98ce\u9669",
         "live_momentum": "\u6eda\u7403\u52a8\u80fd",
     }.get(str(module), str(module))
-
