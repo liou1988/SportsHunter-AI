@@ -1311,6 +1311,68 @@ def test_evaluation_dataset_uses_latest_prediction_per_fixture(mock_pipeline) ->
     assert len(EvaluationDataset(session_factory=Session).rows_for_days(7)) == 1
 
 
+def test_evaluation_dataset_summarizes_lightweight_odds_context(mock_pipeline) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    result.odds = []
+    prediction_id = PredictionArchive(session_factory=Session).save(result)
+    result.fixture.status = FixtureStatus.FINISHED
+    result.fixture.score = Score(home=2, away=1)
+    SettlementService(session_factory=Session).settle_fixtures([result.fixture])
+
+    with Session() as session:
+        prediction = session.get(Prediction, prediction_id)
+        assert prediction is not None
+        db_fixture = prediction.fixture
+        kickoff = db_fixture.start_time
+        if kickoff.tzinfo is None:
+            kickoff = kickoff.replace(tzinfo=timezone.utc)
+        repo = SportsRepository(session)
+        repo.add_odds_snapshot(
+            db_fixture,
+            Odds(
+                fixture_id=result.fixture.id,
+                market=OddsMarket.TOTALS,
+                bookmaker="EarlyBook",
+                captured_at=kickoff - timedelta(hours=3),
+                line=2.5,
+                over=1.91,
+                under=1.91,
+                provider="test",
+                raw={"payload": "x" * 1000},
+            ),
+            stage="pre_match",
+        )
+        repo.add_odds_snapshot(
+            db_fixture,
+            Odds(
+                fixture_id=result.fixture.id,
+                market=OddsMarket.EUROPEAN,
+                bookmaker="ClosingBook",
+                captured_at=kickoff - timedelta(minutes=20),
+                home=1.9,
+                draw=3.2,
+                away=4.1,
+                provider="test",
+                raw={"payload": "y" * 1000},
+            ),
+            stage="closing",
+        )
+        session.commit()
+
+    rows = EvaluationDataset(session_factory=Session).rows_for_days(3)
+
+    assert len(rows) == 1
+    assert rows[0]["odds_snapshot_count"] == 2
+    assert rows[0]["has_closing_odds"] is True
+    assert rows[0]["latest_odds_stage"] == "closing"
+    assert rows[0]["latest_odds_bookmaker"] == "ClosingBook"
+    assert rows[0]["latest_odds_minutes_before_kickoff"] == 20
+    assert rows[0]["odds_markets"] == ["european", "totals"]
+
+
 def test_settlement_scans_pending_archived_predictions(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)

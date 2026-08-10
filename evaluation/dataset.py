@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,6 +19,14 @@ PERIOD_DAYS = {
     "weekly": 7,
     "monthly": 30,
 }
+
+
+class _OddsSnapshotContext(NamedTuple):
+    fixture_id: int
+    market: str | None
+    stage: str | None
+    bookmaker: str | None
+    captured_at: datetime | None
 
 
 class EvaluationDataset:
@@ -159,16 +167,28 @@ def _odds_contexts_for_fixtures(
 ) -> dict[int, dict[str, Any]]:
     if not fixtures_by_id:
         return {}
-    snapshots = list(
-        session.scalars(
-            select(orm.OddsSnapshot)
-            .where(orm.OddsSnapshot.fixture_id.in_(fixtures_by_id))
-            .order_by(orm.OddsSnapshot.fixture_id.asc(), orm.OddsSnapshot.captured_at.asc())
+    snapshots = session.execute(
+        select(
+            orm.OddsSnapshot.fixture_id,
+            orm.OddsSnapshot.market,
+            orm.OddsSnapshot.stage,
+            orm.OddsSnapshot.bookmaker,
+            orm.OddsSnapshot.captured_at,
         )
+        .where(orm.OddsSnapshot.fixture_id.in_(list(fixtures_by_id)))
+        .order_by(orm.OddsSnapshot.fixture_id.asc(), orm.OddsSnapshot.captured_at.asc())
     )
-    grouped: dict[int, list[orm.OddsSnapshot]] = {fixture_id: [] for fixture_id in fixtures_by_id}
-    for snapshot in snapshots:
-        grouped.setdefault(snapshot.fixture_id, []).append(snapshot)
+    grouped: dict[int, list[_OddsSnapshotContext]] = {fixture_id: [] for fixture_id in fixtures_by_id}
+    for fixture_id, market, stage, bookmaker, captured_at in snapshots:
+        grouped.setdefault(fixture_id, []).append(
+            _OddsSnapshotContext(
+                fixture_id=fixture_id,
+                market=market,
+                stage=stage,
+                bookmaker=bookmaker,
+                captured_at=captured_at,
+            )
+        )
     return {
         fixture_id: _odds_context_from_snapshots(fixtures_by_id[fixture_id], fixture_snapshots)
         for fixture_id, fixture_snapshots in grouped.items()
@@ -188,7 +208,7 @@ def _empty_odds_context() -> dict[str, Any]:
 
 def _odds_context_from_snapshots(
     fixture: orm.Fixture,
-    snapshots: list[orm.OddsSnapshot],
+    snapshots: list[_OddsSnapshotContext],
 ) -> dict[str, Any]:
     snapshots = sorted(
         snapshots,
@@ -212,7 +232,7 @@ def _odds_context_from_snapshots(
     }
 
 
-def _is_closing_odds_snapshot(fixture: orm.Fixture, snapshot: orm.OddsSnapshot) -> bool:
+def _is_closing_odds_snapshot(fixture: orm.Fixture, snapshot: _OddsSnapshotContext) -> bool:
     if str(snapshot.stage or "").lower() in {"closing", "live"}:
         return True
     kickoff = _as_utc(fixture.start_time)
