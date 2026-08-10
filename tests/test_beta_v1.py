@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.main import app
 from config.settings import Settings
-from config.logging import SensitiveDataFilter
+from config.logging import LOG_FILE_BACKUP_COUNT, LOG_FILE_MAX_BYTES, SensitiveDataFilter
 from database.base import Base
 from database.models import LearningRecord, MatchResult, ModelVersion, OddsSnapshot, Prediction
 from database.repositories import DashboardRepository, SportsRepository
@@ -278,6 +278,8 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "MODEL_OPTIMIZER_CHECK_MINUTE: ${MODEL_OPTIMIZER_CHECK_MINUTE:-20}" in text
     assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED: ${MODEL_OPTIMIZER_AUTO_APPLY_ENABLED:-true}" in text
     assert "MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES: ${MODEL_OPTIMIZER_AUTO_APPLY_MIN_SAMPLES:-100}" in text
+    assert text.count('max-size: "10m"') == 2
+    assert text.count('max-file: "3"') == 2
 
 
 def test_env_example_contains_triggered_alert_settings() -> None:
@@ -366,6 +368,13 @@ def test_logging_redacts_telegram_bot_token_from_url_objects() -> None:
     )
     assert SensitiveDataFilter().filter(record) is True
     assert record.getMessage() == "HTTP Request: POST https://api.telegram.org/bot<redacted>/sendMessage"
+
+
+def test_logging_file_handler_is_size_bounded() -> None:
+    text = Path("config/logging.py").read_text(encoding="utf-8")
+    assert "RotatingFileHandler" in text
+    assert LOG_FILE_MAX_BYTES == 10 * 1024 * 1024
+    assert LOG_FILE_BACKUP_COUNT == 5
 
 
 def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:

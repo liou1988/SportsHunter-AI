@@ -55,6 +55,11 @@ services:
       - sportshunter_data:/app/data
       - ./logs:/app/logs
       - ./reports:/app/reports
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   telegram_bot:
@@ -114,6 +119,11 @@ services:
       - sportshunter_data:/app/data
       - ./logs:/app/logs
       - ./reports:/app/reports
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:

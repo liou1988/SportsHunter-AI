@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 import re
 import sys
 from typing import Any
@@ -9,6 +10,8 @@ from config.settings import Settings, get_settings
 
 
 TELEGRAM_BOT_TOKEN_PATTERN = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
+LOG_FILE_BACKUP_COUNT = 5
 
 
 def _redact_sensitive_value(value: Any) -> Any:
@@ -67,7 +70,12 @@ def configure_logging(settings: Settings | None = None) -> None:
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(sensitive_filter)
 
-    file_handler = logging.FileHandler(settings.log_file, encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        settings.log_file,
+        maxBytes=LOG_FILE_MAX_BYTES,
+        backupCount=LOG_FILE_BACKUP_COUNT,
+        encoding="utf-8",
+    )
     file_handler.setFormatter(formatter)
     file_handler.addFilter(sensitive_filter)
 
