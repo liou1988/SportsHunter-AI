@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base
@@ -106,6 +106,8 @@ class OddsSnapshot(Base, TimestampMixin):
     raw: Mapped[dict | None] = mapped_column(JSON)
 
     fixture: Mapped[Fixture] = relationship(back_populates="odds_snapshots")
+
+    __table_args__ = (Index("ix_odds_snapshots_fixture_id_captured_at", "fixture_id", "captured_at"),)
 
 
 class MatchStatistics(Base, TimestampMixin):

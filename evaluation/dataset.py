@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database import models as orm
@@ -33,7 +34,19 @@ class EvaluationDataset:
             repo = SportsRepository(session)
             settled = repo.settled_predictions(since=since)
             latest_settled = _latest_prediction_per_fixture(settled)
-            return [_build_row(prediction, fixture, result) for prediction, fixture, result in latest_settled]
+            odds_contexts = _odds_contexts_for_fixtures(
+                session,
+                {fixture.id: fixture for _, fixture, _ in latest_settled},
+            )
+            return [
+                _build_row(
+                    prediction,
+                    fixture,
+                    result,
+                    odds_contexts.get(fixture.id, _empty_odds_context()),
+                )
+                for prediction, fixture, result in latest_settled
+            ]
 
     def create_learning_records(self, rows: list[dict]) -> int:
         created = 0
@@ -77,12 +90,17 @@ def _latest_prediction_per_fixture(
     return latest
 
 
-def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.MatchResult) -> dict:
+def _build_row(
+    prediction: orm.Prediction,
+    fixture: orm.Fixture,
+    result: orm.MatchResult,
+    odds_context: dict[str, Any] | None = None,
+) -> dict:
     market_prediction = (prediction.breakdown_json or {}).get("market_prediction", {})
     score_prediction = market_prediction.get("score", {})
     total_goals = market_prediction.get("total_goals", {})
     handicap = market_prediction.get("handicap", {})
-    odds_context = _odds_context(fixture)
+    odds_context = odds_context or _empty_odds_context()
     winner_side = _winner_side(result.home_score, result.away_score)
     moneyline_pick = str(market_prediction.get("moneyline_pick") or "").upper()
     won = _moneyline_hit(moneyline_pick, prediction.predicted_side, fixture, winner_side)
@@ -135,20 +153,49 @@ def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.Mat
     return row
 
 
-def _odds_context(fixture: orm.Fixture) -> dict[str, Any]:
+def _odds_contexts_for_fixtures(
+    session: Session,
+    fixtures_by_id: dict[int, orm.Fixture],
+) -> dict[int, dict[str, Any]]:
+    if not fixtures_by_id:
+        return {}
+    snapshots = list(
+        session.scalars(
+            select(orm.OddsSnapshot)
+            .where(orm.OddsSnapshot.fixture_id.in_(fixtures_by_id))
+            .order_by(orm.OddsSnapshot.fixture_id.asc(), orm.OddsSnapshot.captured_at.asc())
+        )
+    )
+    grouped: dict[int, list[orm.OddsSnapshot]] = {fixture_id: [] for fixture_id in fixtures_by_id}
+    for snapshot in snapshots:
+        grouped.setdefault(snapshot.fixture_id, []).append(snapshot)
+    return {
+        fixture_id: _odds_context_from_snapshots(fixtures_by_id[fixture_id], fixture_snapshots)
+        for fixture_id, fixture_snapshots in grouped.items()
+    }
+
+
+def _empty_odds_context() -> dict[str, Any]:
+    return {
+        "snapshot_count": 0,
+        "markets": [],
+        "latest_stage": None,
+        "latest_bookmaker": None,
+        "minutes_before_kickoff": None,
+        "has_closing_odds": False,
+    }
+
+
+def _odds_context_from_snapshots(
+    fixture: orm.Fixture,
+    snapshots: list[orm.OddsSnapshot],
+) -> dict[str, Any]:
     snapshots = sorted(
-        list(fixture.odds_snapshots or []),
+        snapshots,
         key=lambda item: _as_utc(item.captured_at) or datetime.min.replace(tzinfo=timezone.utc),
     )
     if not snapshots:
-        return {
-            "snapshot_count": 0,
-            "markets": [],
-            "latest_stage": None,
-            "latest_bookmaker": None,
-            "minutes_before_kickoff": None,
-            "has_closing_odds": False,
-        }
+        return _empty_odds_context()
     latest = snapshots[-1]
     kickoff = _as_utc(fixture.start_time)
     captured_at = _as_utc(latest.captured_at)
