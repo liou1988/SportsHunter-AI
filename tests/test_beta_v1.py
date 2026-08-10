@@ -63,6 +63,7 @@ from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
 from dashboard.router import get_datahub as dashboard_get_datahub
+from dashboard import service as dashboard_service
 from scheduler import jobs
 from scheduler.runner import create_scheduler
 from telegram_bot import localization as localization_module
@@ -1673,6 +1674,19 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert payload["analytics"]["period_days"] == 7
     assert payload["analytics"]["performance"]["period_days"] == 7
     assert payload["reports"]["period_days"] == 7
+
+
+def test_dashboard_provider_status_does_not_deep_scan_provider() -> None:
+    class SlowDataHub:
+        provider = SimpleNamespace(name="slow-provider", last_health=None)
+
+        def provider_status(self):
+            raise AssertionError("summary should not deep-scan provider health")
+
+    payload = dashboard_service._provider_status(SlowDataHub())
+
+    assert payload["provider"] == "slow-provider"
+    assert payload["health"] == "unknown"
 
 
 def test_model_optimizer_api_returns_structured_payload() -> None:

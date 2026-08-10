@@ -176,14 +176,14 @@ def check_data_quality(datahub: DataHub, max_odds_fixtures: int = 12) -> dict[st
 def _provider_status(datahub: DataHub) -> dict[str, Any]:
     try:
         provider = datahub.provider
-        health = provider.last_health or datahub.provider_status()
+        health = provider.last_health
         if health is None:
             return {
                 "provider": provider.name,
                 "health": "unknown",
                 "last_update": None,
                 "latency": None,
-                "error": "尚未执行数据源健康检查",
+                "error": "尚未执行数据源健康检查，可使用数据源质量检查刷新。",
             }
         return {
             "provider": health.provider,
