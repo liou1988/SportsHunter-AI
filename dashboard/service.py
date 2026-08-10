@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -48,7 +49,7 @@ def build_dashboard_summary(
         "database": database,
         "recommendations": _archived_recommendation_status(database),
         "analytics": _analytics_status(database, period_days),
-        "model_optimizer": model_optimizer_status(),
+        "model_optimizer": _cached_model_optimizer_status(settings),
         "reports": _report_status(settings, period_days),
     }
 
@@ -93,6 +94,33 @@ def run_daily_evaluation(
 
 def model_optimizer_status() -> dict[str, Any]:
     return ModelOptimizer().build_report("monthly").to_dict()
+
+
+def _cached_model_optimizer_status(settings: Settings) -> dict[str, Any]:
+    path = settings.model_optimizer_status_path
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "status": "empty",
+            "status_label": "待检查",
+            "can_apply": False,
+            "sample_count": 0,
+            "min_recommended_sample": settings.model_optimizer_manual_min_samples,
+            "wins": 0,
+            "losses": 0,
+            "hit_rate": 0.0,
+            "roi": 0.0,
+            "confidence_error": 0.0,
+            "current_weights": {},
+            "suggested_weights": {},
+            "suggestions": [],
+            "warnings": ["尚未生成模型优化状态，等待定时任务或手动检查。"],
+        }
+    report = payload.get("report") if isinstance(payload, dict) else None
+    if isinstance(report, dict):
+        return report
+    return payload if isinstance(payload, dict) else {}
 
 
 def apply_model_optimizer() -> dict[str, Any]:
