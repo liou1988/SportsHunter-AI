@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from alembic import op
+import sqlalchemy as sa
 
 
 revision = "202608100001"
@@ -12,6 +13,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    existing_indexes = {
+        index["name"]
+        for index in sa.inspect(op.get_bind()).get_indexes("odds_snapshots")
+    }
+    if "ix_odds_snapshots_fixture_id_captured_at" in existing_indexes:
+        return
     op.create_index(
         "ix_odds_snapshots_fixture_id_captured_at",
         "odds_snapshots",
