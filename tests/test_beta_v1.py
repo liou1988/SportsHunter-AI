@@ -43,6 +43,7 @@ from pipeline.archive import PredictionArchive
 from pipeline.runner import PredictionPipeline
 from pipeline.market_model import MarketPredictionModel
 from pipeline.models import HandicapPrediction, MarketPrediction, ScorePrediction, TotalGoalsPrediction
+from pipeline.recommendation_gate import RecommendationGate
 from pipeline.probability import (
     HistoricalProbabilityModel,
     OutcomeProbabilities,
@@ -273,6 +274,9 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_ALERT_SIGNALS: ${TELEGRAM_ALERT_SIGNALS:-STRONG_BUY,BUY,WATCH}" in text
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES: ${TELEGRAM_ALERT_INTERVAL_MINUTES:-5}" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}" in text
+    assert "RECOMMENDATION_GATE_ENABLED: ${RECOMMENDATION_GATE_ENABLED:-true}" in text
+    assert "RECOMMENDATION_ALLOWED_SIGNALS: ${RECOMMENDATION_ALLOWED_SIGNALS:-STRONG_BUY,BUY}" in text
+    assert "RECOMMENDATION_MIN_MARKET_EDGE: ${RECOMMENDATION_MIN_MARKET_EDGE:-0.04}" in text
     assert "MODEL_OPTIMIZER_ENABLED: ${MODEL_OPTIMIZER_ENABLED:-true}" in text
     assert "MODEL_OPTIMIZER_CHECK_HOUR: ${MODEL_OPTIMIZER_CHECK_HOUR:-1}" in text
     assert "MODEL_OPTIMIZER_CHECK_MINUTE: ${MODEL_OPTIMIZER_CHECK_MINUTE:-20}" in text
@@ -293,6 +297,9 @@ def test_env_example_contains_triggered_alert_settings() -> None:
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES=5" in text
     assert "TELEGRAM_ALERT_RETENTION_DAYS=7" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json" in text
+    assert "RECOMMENDATION_GATE_ENABLED=true" in text
+    assert "RECOMMENDATION_ALLOWED_SIGNALS=STRONG_BUY,BUY" in text
+    assert "RECOMMENDATION_MIN_MARKET_EDGE=0.04" in text
     assert "MODEL_OPTIMIZER_ENABLED=true" in text
     assert "MODEL_OPTIMIZER_MANUAL_MIN_SAMPLES=20" in text
     assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=true" in text
@@ -990,8 +997,10 @@ def test_today_recommendations_archive_prediction_results(mock_pipeline) -> None
 
     with Session() as session:
         assert session.query(Prediction).count() == len(mock_pipeline.run_today())
+        assert session.query(OddsSnapshot).count() >= 1
 
     assert payload["archive"]["created_count"] == len(mock_pipeline.run_today())
+    assert payload["archive"]["items"][0]["odds_snapshot_count"] >= 1
     assert payload["items"][0]["prediction_id"] is not None
     assert payload["items"][0]["score_prediction"]
     assert payload["items"][0]["total_goals"]
@@ -1522,6 +1531,45 @@ def test_repository_keeps_odds_history(mock_settings) -> None:
     assert len(snapshots) == 2
 
 
+def test_recommendation_gate_blocks_watch_and_weak_league() -> None:
+    pipeline = _fake_recommendation_pipeline()
+    buy, watch = pipeline.run_today()[:2]
+    odds = pipeline.context.datahub.get_odds(buy.fixture.id)
+    now = buy.fixture.start_time - timedelta(minutes=30)
+    settings = Settings(data_provider="mock", _env_file=None)
+
+    watch_decision = RecommendationGate(settings, history_rows=[]).evaluate(watch, odds=odds, now=now)
+    assert watch_decision.passed is False
+    assert "signal_not_actionable" in watch_decision.reasons
+
+    weak_rows = [
+        {"league": "Debug League", "actionable": True, "won": False, "stake": 1, "profit": -1}
+        for _ in range(settings.recommendation_league_min_samples)
+    ]
+    weak_league_decision = RecommendationGate(settings, history_rows=weak_rows).evaluate(buy, odds=odds, now=now)
+    assert weak_league_decision.passed is False
+    assert "league_recent_performance_weak" in weak_league_decision.reasons
+
+
+def test_recommendation_gate_blocks_missing_market_edge() -> None:
+    pipeline = _fake_recommendation_pipeline()
+    result = pipeline.run_today()[0]
+    result.market_prediction.total_goals.pick = "NO_PLAY"
+    result.market_prediction.total_goals.edge = 0.0
+    result.market_prediction.handicap.pick = "NO_PLAY"
+    result.market_prediction.handicap.edge = 0.0
+    now = result.fixture.start_time - timedelta(minutes=30)
+
+    decision = RecommendationGate(Settings(data_provider="mock", _env_file=None), history_rows=[]).evaluate(
+        result,
+        odds=pipeline.context.datahub.get_odds(result.fixture.id),
+        now=now,
+    )
+
+    assert decision.passed is False
+    assert "market_edge_too_small" in decision.reasons
+
+
 def test_api_health() -> None:
     client = TestClient(app)
     response = client.get("/api/health")
@@ -1555,7 +1603,8 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "period-control" in response.text
     assert "model-performance-caption" in response.text
     assert "dashboard-summary-link" in response.text
-    assert "20260807-period-stats" in response.text
+    assert "odds-quality-performance" in response.text
+    assert "20260810-recommendation-gate" in response.text
     assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
@@ -1600,6 +1649,7 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert "database" in payload
     assert "analytics" in payload
     assert "performance" in payload["analytics"]
+    assert "odds_quality_performance" in payload["analytics"]["performance"]
     assert "signal_distribution" in payload["analytics"]
     assert "prediction_trend" in payload["analytics"]
     assert "model_optimizer" in payload
@@ -2046,6 +2096,7 @@ def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None
         archive=AlertArchive(settings.telegram_alert_archive_path),
         prediction_archive=_FakePredictionArchive(),
         settings=settings,
+        gate=RecommendationGate(settings, history_rows=[]),
     )
 
     first = asyncio.run(pusher.push_new())
@@ -2054,13 +2105,13 @@ def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None
     assert first.success is True
     assert first.sent is True
     assert first.evaluated_count == 4
-    assert first.eligible_count == 3
-    assert first.pushed_count == 3
+    assert first.eligible_count == 2
+    assert first.pushed_count == 2
     assert second.success is True
     assert second.sent is False
     assert second.pushed_count == 0
-    assert second.skipped_count == 3
-    assert len(sent_messages) == 3
+    assert second.skipped_count == 2
+    assert len(sent_messages) == 2
     assert all("SportsHunter AI 发现合适比赛" in message for message in sent_messages)
 
 
@@ -2101,6 +2152,7 @@ def test_telegram_alert_pusher_skips_already_started_matches(tmp_path) -> None:
         archive=AlertArchive(settings.telegram_alert_archive_path),
         prediction_archive=prediction_archive,
         settings=settings,
+        gate=RecommendationGate(settings, history_rows=[]),
     )
 
     result = asyncio.run(pusher.push_new())
@@ -2150,6 +2202,10 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
                     telegram_alert_archive_path=tmp_path / "api-alerts.json",
                     _env_file=None,
                 ),
+                gate=RecommendationGate(
+                    Settings(data_provider="mock", telegram_alert_archive_path=tmp_path / "api-alerts.json", _env_file=None),
+                    history_rows=[],
+                ),
             )
 
         async def push_new(self):
@@ -2166,8 +2222,8 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
     payload = response.json()
     assert payload["success"] is True
     assert payload["sent"] is True
-    assert payload["pushed_count"] == 3
-    assert len(sent_messages) == 3
+    assert payload["pushed_count"] == 2
+    assert len(sent_messages) == 2
 
 
 def test_scheduler_registers_triggered_telegram_alert_job() -> None:
@@ -2261,7 +2317,8 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260807-period-stats" in template
+    assert "20260810-recommendation-gate" in template
+    assert "odds-quality-performance" in template
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))

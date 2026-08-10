@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from core.rating.engine import HunterScore
 from core.risk.models import RiskResult
 from core.signal.models import SignalResult
-from datahub.models import Fixture, to_plain_dict
+from datahub.models import Fixture, Odds, to_plain_dict
 from features.models import FeatureVector
 
 
@@ -140,6 +140,7 @@ class PredictionResult:
     signal: SignalResult
     market_prediction: MarketPrediction
     predicted_side: str | None
+    odds: list[Odds] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -150,4 +151,5 @@ class PredictionResult:
             "signal": self.signal.to_dict(),
             "market_prediction": self.market_prediction.to_dict(),
             "predicted_side": self.predicted_side,
+            "odds": to_plain_dict(self.odds),
         }

@@ -433,6 +433,13 @@ function renderAnalytics(analytics) {
     percentValue: true,
     empty: "暂无盘口复盘数据。",
   });
+  renderBarList("odds-quality-performance", performance.odds_quality_performance || [], {
+    label: (item) => item.label || translateOddsQuality(item.segment),
+    value: (item) => item.hit_rate,
+    meta: (item) => `${formatNumber(item.wins)} / ${formatNumber(item.count)} 场 · ROI ${formatPercent(item.roi)}`,
+    percentValue: true,
+    empty: "暂无盘口质量复盘数据。",
+  });
   renderRankList("league-performance", performance.league_performance || []);
 }
 
@@ -892,6 +899,15 @@ function translateMarket(value) {
     european: "欧赔",
     asian_handicap: "亚盘",
     totals: "大小球",
+  };
+  return map[String(value)] || value;
+}
+
+function translateOddsQuality(value) {
+  const map = {
+    closing_odds: "临场盘口",
+    pre_match_odds: "普通盘口",
+    missing_odds: "无盘口",
   };
   return map[String(value)] || value;
 }

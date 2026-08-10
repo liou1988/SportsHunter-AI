@@ -296,6 +296,20 @@ class Settings(BaseSettings):
     telegram_alert_retention_days: int = 7
     telegram_alert_archive_path: Path = Path("reports/telegram_alerts.json")
 
+    recommendation_gate_enabled: bool = True
+    recommendation_allowed_signals: list[str] = Field(default_factory=lambda: ["STRONG_BUY", "BUY"])
+    recommendation_min_score: float = 82.0
+    recommendation_min_confidence: float = 0.62
+    recommendation_prematch_min_minutes: int = 15
+    recommendation_prematch_max_minutes: int = 360
+    recommendation_require_odds: bool = True
+    recommendation_min_market_edge: float = 0.04
+    recommendation_min_expected_value: float = 0.0
+    recommendation_league_review_days: int = 15
+    recommendation_league_min_samples: int = 5
+    recommendation_league_min_hit_rate: float = 0.40
+    recommendation_league_min_roi: float = -0.15
+
     history_collection_enabled: bool = True
     evaluation_enabled: bool = True
     automation_enabled: bool = True
@@ -357,6 +371,7 @@ class Settings(BaseSettings):
         "api_football_bookmaker_ids",
         "api_football_bet_ids",
         "telegram_alert_signals",
+        "recommendation_allowed_signals",
         mode="before",
     )
     @classmethod

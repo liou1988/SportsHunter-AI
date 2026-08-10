@@ -82,6 +82,7 @@ def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.Mat
     score_prediction = market_prediction.get("score", {})
     total_goals = market_prediction.get("total_goals", {})
     handicap = market_prediction.get("handicap", {})
+    odds_context = _odds_context(fixture)
     winner_side = _winner_side(result.home_score, result.away_score)
     moneyline_pick = str(market_prediction.get("moneyline_pick") or "").upper()
     won = _moneyline_hit(moneyline_pick, prediction.predicted_side, fixture, winner_side)
@@ -112,6 +113,12 @@ def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.Mat
         "handicap_label": handicap.get("label"),
         "handicap_side": handicap.get("side"),
         "handicap_line": handicap.get("line"),
+        "odds_snapshot_count": odds_context["snapshot_count"],
+        "odds_markets": odds_context["markets"],
+        "latest_odds_stage": odds_context["latest_stage"],
+        "latest_odds_bookmaker": odds_context["latest_bookmaker"],
+        "latest_odds_minutes_before_kickoff": odds_context["minutes_before_kickoff"],
+        "has_closing_odds": odds_context["has_closing_odds"],
         "won": won if actionable else False,
         "actionable": actionable,
         "profit": _profit(stake, won) if actionable else 0.0,
@@ -126,6 +133,47 @@ def _build_row(prediction: orm.Prediction, fixture: orm.Fixture, result: orm.Mat
     }
     row["primary_error_module"] = _primary_error_module(row, prediction.breakdown_json or {})
     return row
+
+
+def _odds_context(fixture: orm.Fixture) -> dict[str, Any]:
+    snapshots = sorted(
+        list(fixture.odds_snapshots or []),
+        key=lambda item: _as_utc(item.captured_at) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if not snapshots:
+        return {
+            "snapshot_count": 0,
+            "markets": [],
+            "latest_stage": None,
+            "latest_bookmaker": None,
+            "minutes_before_kickoff": None,
+            "has_closing_odds": False,
+        }
+    latest = snapshots[-1]
+    kickoff = _as_utc(fixture.start_time)
+    captured_at = _as_utc(latest.captured_at)
+    minutes_before_kickoff = None
+    if kickoff is not None and captured_at is not None:
+        minutes_before_kickoff = round((kickoff - captured_at).total_seconds() / 60, 2)
+    return {
+        "snapshot_count": len(snapshots),
+        "markets": sorted({str(item.market) for item in snapshots if item.market}),
+        "latest_stage": latest.stage,
+        "latest_bookmaker": latest.bookmaker,
+        "minutes_before_kickoff": minutes_before_kickoff,
+        "has_closing_odds": any(_is_closing_odds_snapshot(fixture, item) for item in snapshots),
+    }
+
+
+def _is_closing_odds_snapshot(fixture: orm.Fixture, snapshot: orm.OddsSnapshot) -> bool:
+    if str(snapshot.stage or "").lower() in {"closing", "live"}:
+        return True
+    kickoff = _as_utc(fixture.start_time)
+    captured_at = _as_utc(snapshot.captured_at)
+    if kickoff is None or captured_at is None:
+        return False
+    minutes_before_kickoff = (kickoff - captured_at).total_seconds() / 60
+    return 0 <= minutes_before_kickoff <= 90
 
 
 def _moneyline_hit(moneyline_pick: str, predicted_side: str | None, fixture: orm.Fixture, winner_side: str | None) -> bool:
@@ -194,6 +242,14 @@ def _winner_side(home_score: int | None, away_score: int | None) -> str | None:
     if away_score > home_score:
         return "away"
     return "draw"
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _profit(stake: float, won: bool) -> float:

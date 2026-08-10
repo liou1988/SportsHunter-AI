@@ -40,6 +40,7 @@ class PredictionPipeline:
             signal=signal,
             market_prediction=market_prediction,
             predicted_side=predicted_side,
+            odds=odds,
         )
 
     def run_live(self, fixture_id: str) -> PredictionResult:

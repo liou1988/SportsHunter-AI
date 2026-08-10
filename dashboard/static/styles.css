@@ -500,6 +500,12 @@ dt {
   padding: 12px 14px;
 }
 
+.subsection-title {
+  padding: 8px 14px 0;
+  font-size: 13px;
+  color: #485564;
+}
+
 .bar-row {
   min-width: 0;
 }

@@ -328,6 +328,7 @@ def _performance_snapshot(rows: list[dict[str, Any]], period_days: int) -> dict[
         "calibration_error": metrics.confidence_calibration_error,
         "league_performance": _league_performance(scored_rows),
         "market_performance": _market_performance(rows),
+        "odds_quality_performance": _odds_quality_performance(scored_rows),
         "module_errors": _module_errors(rows),
         "score_buckets": _settled_score_buckets(scored_rows),
         "confidence_bands": _confidence_bands(scored_rows),
@@ -349,6 +350,7 @@ def _empty_performance(period_days: int = DEFAULT_STAT_PERIOD_DAYS) -> dict[str,
         "calibration_error": 0.0,
         "league_performance": [],
         "market_performance": [],
+        "odds_quality_performance": [],
         "module_errors": [],
         "score_buckets": [],
         "confidence_bands": [],
@@ -409,6 +411,37 @@ def _market_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "count": len(hits),
                 "wins": wins,
                 "hit_rate": wins / len(hits) if hits else 0.0,
+            }
+        )
+    return items
+
+
+def _odds_quality_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    segments = [
+        ("closing_odds", "\u4e34\u573a\u76d8\u53e3", lambda row: bool(row.get("has_closing_odds"))),
+        (
+            "pre_match_odds",
+            "\u666e\u901a\u76d8\u53e3",
+            lambda row: int(row.get("odds_snapshot_count") or 0) > 0 and not row.get("has_closing_odds"),
+        ),
+        ("missing_odds", "\u65e0\u76d8\u53e3", lambda row: int(row.get("odds_snapshot_count") or 0) <= 0),
+    ]
+    items: list[dict[str, Any]] = []
+    for segment, label, predicate in segments:
+        segment_rows = [row for row in rows if predicate(row)]
+        if not segment_rows:
+            continue
+        wins = sum(1 for row in segment_rows if row.get("won"))
+        stake = sum(float(row.get("stake") or 0) for row in segment_rows) or 1.0
+        profit = sum(float(row.get("profit") or 0) for row in segment_rows)
+        items.append(
+            {
+                "segment": segment,
+                "label": label,
+                "count": len(segment_rows),
+                "wins": wins,
+                "hit_rate": wins / len(segment_rows) if segment_rows else 0.0,
+                "roi": profit / stake,
             }
         )
     return items

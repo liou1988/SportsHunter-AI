@@ -12,6 +12,7 @@ from config.settings import Settings, get_settings
 from datahub.models import OddsMarket, to_plain_dict
 from pipeline.archive import PredictionArchive
 from pipeline.models import PredictionResult
+from pipeline.recommendation_gate import RecommendationGate
 from pipeline.runner import PredictionPipeline
 from telegram_bot.localization import (
     format_beijing_time,
@@ -125,6 +126,7 @@ class RecommendationAlertPusher:
         archive: AlertArchive | None = None,
         prediction_archive: PredictionArchive | None = None,
         settings: Settings | None = None,
+        gate: RecommendationGate | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.pipeline = pipeline or PredictionPipeline()
@@ -134,6 +136,7 @@ class RecommendationAlertPusher:
             self.settings.telegram_alert_retention_days,
         )
         self.prediction_archive = prediction_archive or PredictionArchive()
+        self.gate = gate or RecommendationGate(self.settings)
 
     async def push_new(self) -> AlertPushResult:
         results = self.pipeline.run_today()
@@ -218,8 +221,25 @@ class RecommendationAlertPusher:
             for result in results
             if result.signal.signal.value in allowed and result.signal.stake > 0
             and _is_unstarted_alert_fixture(result.fixture, now)
+            and self._passes_recommendation_gate(result, now)
         ]
         return sorted(candidates, key=lambda result: result.hunter_score.score, reverse=True)
+
+    def _passes_recommendation_gate(self, result: PredictionResult, now: datetime) -> bool:
+        odds = list(getattr(result, "odds", []) or [])
+        if not odds:
+            odds = _load_fixture_odds(self.pipeline, result.fixture.id)
+        decision = self.gate.evaluate(result, odds=odds, now=now)
+        if not decision.passed:
+            logger.info(
+                "telegram alert recommendation gate blocked fixture",
+                extra={
+                    "fixture_id": result.fixture.id,
+                    "reasons": decision.reasons,
+                    "metrics": decision.metrics,
+                },
+            )
+        return decision.passed
 
     @staticmethod
     def _alert_key(result: PredictionResult) -> str:
@@ -276,14 +296,18 @@ def _format_odds_lines(odds: dict | list) -> list[str]:
 
 
 def _fixture_odds(pipeline: PredictionPipeline, fixture_id: str) -> dict | list:
-    try:
-        odds_items = pipeline.context.datahub.get_odds(fixture_id)
-    except Exception:  # noqa: BLE001 - alert output should survive missing odds
-        return {}
+    odds_items = _load_fixture_odds(pipeline, fixture_id)
     european = next((odds for odds in odds_items if odds.market == OddsMarket.EUROPEAN), None)
     if european is not None:
         return to_plain_dict(european)
     return to_plain_dict(odds_items)
+
+
+def _load_fixture_odds(pipeline: PredictionPipeline, fixture_id: str) -> list:
+    try:
+        return list(pipeline.context.datahub.get_odds(fixture_id))
+    except Exception:  # noqa: BLE001 - alert output should survive missing odds
+        return []
 
 
 def _is_unstarted_alert_fixture(fixture: Any, now: datetime | None = None) -> bool:

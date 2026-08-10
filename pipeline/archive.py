@@ -24,6 +24,7 @@ SessionFactory = Callable[[], Session]
 class ArchiveSaveResult:
     fixture_id: str
     prediction_id: int | None = None
+    odds_snapshot_count: int = 0
     created: bool = False
     skipped: bool = False
     reason: str | None = None
@@ -33,6 +34,7 @@ class ArchiveSaveResult:
         return {
             "fixture_id": self.fixture_id,
             "prediction_id": self.prediction_id,
+            "odds_snapshot_count": self.odds_snapshot_count,
             "created": self.created,
             "skipped": self.skipped,
             "reason": self.reason,
@@ -95,6 +97,7 @@ class PredictionArchive:
                 weight_config=active_weights,
             )
             session.flush()
+            _save_odds_snapshots(repo, fixture, result)
             prediction = self._create_prediction(repo, fixture, model_version, result)
             session.commit()
             return int(prediction.id)
@@ -116,6 +119,7 @@ class PredictionArchive:
                 session.flush()
 
                 signature = _result_signature(result)
+                odds_snapshot_count = _save_odds_snapshots(repo, fixture, result)
                 latest = session.scalar(
                     select(orm.Prediction)
                     .where(
@@ -126,9 +130,11 @@ class PredictionArchive:
                     .limit(1)
                 )
                 if latest is not None and _prediction_signature(latest) == signature:
+                    session.commit()
                     return ArchiveSaveResult(
                         fixture_id=str(result.fixture.id),
                         prediction_id=int(latest.id),
+                        odds_snapshot_count=odds_snapshot_count,
                         created=False,
                         skipped=True,
                         reason="unchanged",
@@ -145,6 +151,7 @@ class PredictionArchive:
                 return ArchiveSaveResult(
                     fixture_id=str(result.fixture.id),
                     prediction_id=int(prediction.id),
+                    odds_snapshot_count=odds_snapshot_count,
                     created=True,
                     skipped=False,
                     reason="created",
@@ -203,6 +210,39 @@ class PredictionArchive:
             breakdown_json=breakdown_json,
             model_version=model_version,
         )
+
+
+def _save_odds_snapshots(repo: SportsRepository, fixture: orm.Fixture, result: PredictionResult) -> int:
+    odds_items = list(getattr(result, "odds", []) or [])
+    if not odds_items:
+        return 0
+    stage = _odds_snapshot_stage(result.fixture)
+    for odds in odds_items:
+        repo.add_odds_snapshot(fixture, odds, stage=stage)
+    return len(odds_items)
+
+
+def _odds_snapshot_stage(fixture: object, now: datetime | None = None) -> str:
+    raw_status = getattr(fixture, "status", "unknown")
+    status = str(getattr(raw_status, "value", raw_status)).lower()
+    if status == "live":
+        return "live"
+    start_time = _as_utc(getattr(fixture, "start_time", None))
+    if start_time is None:
+        return "pre_match"
+    now = _as_utc(now) or datetime.now(timezone.utc)
+    minutes_to_kickoff = (start_time - now).total_seconds() / 60
+    if 0 <= minutes_to_kickoff <= 90:
+        return "closing"
+    return "pre_match"
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _result_signature(result: PredictionResult) -> dict[str, Any]:
