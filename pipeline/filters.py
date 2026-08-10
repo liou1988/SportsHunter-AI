@@ -9,6 +9,7 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 PRE_MATCH_FIXTURE_STATUSES = {"scheduled", "unknown"}
 LIVE_FIXTURE_STATUSES = {"live"}
 LIVE_FIXTURE_MAX_AGE = timedelta(hours=3)
+PRE_MATCH_LOOKAHEAD = timedelta(hours=6)
 
 
 def prediction_candidate_fixtures(
@@ -39,12 +40,11 @@ def is_prediction_candidate_fixture(fixture: Any, now: datetime | None = None) -
         return False
 
     now = _as_utc(now) or datetime.now(timezone.utc)
-    if not _is_beijing_today(start_time, now):
-        return False
-
     status = _fixture_status_value(fixture)
     if status in PRE_MATCH_FIXTURE_STATUSES:
-        return start_time >= now
+        if start_time < now:
+            return False
+        return _is_beijing_today(start_time, now) or start_time - now <= PRE_MATCH_LOOKAHEAD
     if status in LIVE_FIXTURE_STATUSES:
         return start_time <= now and now - start_time <= LIVE_FIXTURE_MAX_AGE
     return False

@@ -59,6 +59,7 @@ from api.services.recommendations import (
     build_recommendations_export_csv,
     build_today_recommendations,
 )
+from api.routers import matches as matches_router
 from api.routers import provider as provider_router
 from api.routers import recommendations as recommendations_router
 from api.routers import telegram as telegram_router
@@ -407,8 +408,8 @@ def test_prediction_pipeline_runs_with_mock(mock_pipeline) -> None:
     assert result.to_dict()["market_prediction"]["score"]["text"] == result.market_prediction.score.text
 
 
-def test_prediction_pipeline_only_runs_today_upcoming_or_live_candidates() -> None:
-    now = datetime(2026, 8, 5, 4, 0, tzinfo=timezone.utc)
+def test_prediction_pipeline_only_runs_today_or_nearby_live_candidates() -> None:
+    now = datetime(2026, 8, 5, 15, 0, tzinfo=timezone.utc)
     league = League(id="league", name="League", provider="mock")
     home = Team(id="home", name="Home", provider="mock")
     away = Team(id="away", name="Away", provider="mock")
@@ -428,6 +429,7 @@ def test_prediction_pipeline_only_runs_today_upcoming_or_live_candidates() -> No
         def get_today_fixtures(self) -> list[Fixture]:
             return [
                 fixture("today-upcoming", now + timedelta(minutes=30), FixtureStatus.SCHEDULED),
+                fixture("overnight-soon", now + timedelta(hours=2), FixtureStatus.SCHEDULED),
                 fixture("tomorrow", now + timedelta(days=1), FixtureStatus.SCHEDULED),
                 fixture("already-started", now - timedelta(minutes=5), FixtureStatus.SCHEDULED),
                 fixture("finished", now + timedelta(minutes=15), FixtureStatus.FINISHED),
@@ -448,8 +450,42 @@ def test_prediction_pipeline_only_runs_today_upcoming_or_live_candidates() -> No
 
     pipeline.run_fixture = fake_run_fixture
 
-    assert pipeline.run_today(now=now) == ["today-upcoming", "live-recent"]
-    assert called == ["today-upcoming", "live-recent"]
+    assert pipeline.run_today(now=now) == ["today-upcoming", "overnight-soon", "live-recent"]
+    assert called == ["today-upcoming", "overnight-soon", "live-recent"]
+
+
+def test_matches_today_returns_prediction_candidates() -> None:
+    league = League(id="league", name="League", provider="mock")
+    home = Team(id="home", name="Home", provider="mock")
+    away = Team(id="away", name="Away", provider="mock")
+
+    def fixture(fixture_id: str, start_time: datetime, status: FixtureStatus) -> Fixture:
+        return Fixture(
+            id=fixture_id,
+            league=league,
+            home_team=home,
+            away_team=away,
+            start_time=start_time,
+            status=status,
+            provider="mock",
+        )
+
+    class FakeDataHub:
+        def get_today_fixtures(self) -> list[Fixture]:
+            return [
+                fixture("today", _future_beijing_today_start(), FixtureStatus.SCHEDULED),
+                fixture("tomorrow", _tomorrow_beijing_start(), FixtureStatus.SCHEDULED),
+            ]
+
+        def get_live_matches(self) -> list[Fixture]:
+            return []
+
+    payload = matches_router.today_matches(FakeDataHub())
+
+    assert payload["count"] == 1
+    assert payload["source_count"] == 2
+    assert payload["live_count"] == 0
+    assert payload["items"][0]["id"] == "today"
 
 
 def test_data_sync_commits_successful_fixtures_and_rolls_back_failed_one(monkeypatch) -> None:
