@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from database import models as orm
 from database.repositories import SportsRepository
 from database.session import SessionLocal
+from evaluation.odds_evidence import empty_settled_odds_context, summarize_settled_odds
 from telegram_bot.localization import translate_league_name, translate_match_text
 
 SessionFactory = Callable[[], Session]
@@ -23,7 +24,14 @@ PERIOD_DAYS = {
 
 class _OddsSnapshotContext(NamedTuple):
     fixture_id: int
+    provider: str | None
     market: str | None
+    line: float | None
+    home: float | None
+    draw: float | None
+    away: float | None
+    over: float | None
+    under: float | None
     stage: str | None
     bookmaker: str | None
     captured_at: datetime | None
@@ -42,9 +50,12 @@ class EvaluationDataset:
             repo = SportsRepository(session)
             settled = repo.settled_predictions(since=since)
             latest_settled = _latest_prediction_per_fixture(settled)
+            fixtures_by_id = {fixture.id: fixture for _, fixture, _ in latest_settled}
+            predictions_by_fixture_id = {fixture.id: prediction for prediction, fixture, _ in latest_settled}
             odds_contexts = _odds_contexts_for_fixtures(
                 session,
-                {fixture.id: fixture for _, fixture, _ in latest_settled},
+                fixtures_by_id,
+                predictions_by_fixture_id,
             )
             return [
                 _build_row(
@@ -109,6 +120,7 @@ def _build_row(
     total_goals = market_prediction.get("total_goals", {})
     handicap = market_prediction.get("handicap", {})
     odds_context = odds_context or _empty_odds_context()
+    clv_context = odds_context.get("clv") or {}
     winner_side = _winner_side(result.home_score, result.away_score)
     moneyline_pick = str(market_prediction.get("moneyline_pick") or "").upper()
     won = _moneyline_hit(moneyline_pick, prediction.predicted_side, fixture, winner_side)
@@ -144,7 +156,14 @@ def _build_row(
         "latest_odds_stage": odds_context["latest_stage"],
         "latest_odds_bookmaker": odds_context["latest_bookmaker"],
         "latest_odds_minutes_before_kickoff": odds_context["minutes_before_kickoff"],
+        "odds_freshness_bucket": odds_context.get("freshness_bucket"),
+        "odds_bookmaker_count": odds_context.get("bookmaker_count", 0),
+        "has_sharp_anchor": odds_context.get("has_sharp_anchor", False),
         "has_closing_odds": odds_context["has_closing_odds"],
+        "clv": clv_context,
+        "avg_clv": clv_context.get("avg"),
+        "trusted_clv": clv_context.get("trusted_avg"),
+        "positive_clv_rate": clv_context.get("positive_rate", 0.0),
         "won": won if actionable else False,
         "actionable": actionable,
         "profit": _profit(stake, won) if actionable else 0.0,
@@ -164,13 +183,21 @@ def _build_row(
 def _odds_contexts_for_fixtures(
     session: Session,
     fixtures_by_id: dict[int, orm.Fixture],
+    predictions_by_fixture_id: dict[int, orm.Prediction],
 ) -> dict[int, dict[str, Any]]:
     if not fixtures_by_id:
         return {}
     snapshots = session.execute(
         select(
             orm.OddsSnapshot.fixture_id,
+            orm.OddsSnapshot.provider,
             orm.OddsSnapshot.market,
+            orm.OddsSnapshot.line,
+            orm.OddsSnapshot.home,
+            orm.OddsSnapshot.draw,
+            orm.OddsSnapshot.away,
+            orm.OddsSnapshot.over,
+            orm.OddsSnapshot.under,
             orm.OddsSnapshot.stage,
             orm.OddsSnapshot.bookmaker,
             orm.OddsSnapshot.captured_at,
@@ -179,68 +206,35 @@ def _odds_contexts_for_fixtures(
         .order_by(orm.OddsSnapshot.fixture_id.asc(), orm.OddsSnapshot.captured_at.asc())
     )
     grouped: dict[int, list[_OddsSnapshotContext]] = {fixture_id: [] for fixture_id in fixtures_by_id}
-    for fixture_id, market, stage, bookmaker, captured_at in snapshots:
+    for fixture_id, provider, market, line, home, draw, away, over, under, stage, bookmaker, captured_at in snapshots:
         grouped.setdefault(fixture_id, []).append(
             _OddsSnapshotContext(
                 fixture_id=fixture_id,
+                provider=provider,
                 market=market,
+                line=line,
+                home=home,
+                draw=draw,
+                away=away,
+                over=over,
+                under=under,
                 stage=stage,
                 bookmaker=bookmaker,
                 captured_at=captured_at,
             )
         )
     return {
-        fixture_id: _odds_context_from_snapshots(fixtures_by_id[fixture_id], fixture_snapshots)
+        fixture_id: summarize_settled_odds(
+            fixtures_by_id[fixture_id],
+            predictions_by_fixture_id[fixture_id],
+            fixture_snapshots,
+        )
         for fixture_id, fixture_snapshots in grouped.items()
     }
 
 
 def _empty_odds_context() -> dict[str, Any]:
-    return {
-        "snapshot_count": 0,
-        "markets": [],
-        "latest_stage": None,
-        "latest_bookmaker": None,
-        "minutes_before_kickoff": None,
-        "has_closing_odds": False,
-    }
-
-
-def _odds_context_from_snapshots(
-    fixture: orm.Fixture,
-    snapshots: list[_OddsSnapshotContext],
-) -> dict[str, Any]:
-    snapshots = sorted(
-        snapshots,
-        key=lambda item: _as_utc(item.captured_at) or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    if not snapshots:
-        return _empty_odds_context()
-    latest = snapshots[-1]
-    kickoff = _as_utc(fixture.start_time)
-    captured_at = _as_utc(latest.captured_at)
-    minutes_before_kickoff = None
-    if kickoff is not None and captured_at is not None:
-        minutes_before_kickoff = round((kickoff - captured_at).total_seconds() / 60, 2)
-    return {
-        "snapshot_count": len(snapshots),
-        "markets": sorted({str(item.market) for item in snapshots if item.market}),
-        "latest_stage": latest.stage,
-        "latest_bookmaker": latest.bookmaker,
-        "minutes_before_kickoff": minutes_before_kickoff,
-        "has_closing_odds": any(_is_closing_odds_snapshot(fixture, item) for item in snapshots),
-    }
-
-
-def _is_closing_odds_snapshot(fixture: orm.Fixture, snapshot: _OddsSnapshotContext) -> bool:
-    if str(snapshot.stage or "").lower() in {"closing", "live"}:
-        return True
-    kickoff = _as_utc(fixture.start_time)
-    captured_at = _as_utc(snapshot.captured_at)
-    if kickoff is None or captured_at is None:
-        return False
-    minutes_before_kickoff = (kickoff - captured_at).total_seconds() / 60
-    return 0 <= minutes_before_kickoff <= 90
+    return empty_settled_odds_context()
 
 
 def _moneyline_hit(moneyline_pick: str, predicted_side: str | None, fixture: orm.Fixture, winner_side: str | None) -> bool:

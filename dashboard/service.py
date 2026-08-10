@@ -357,6 +357,8 @@ def _performance_snapshot(rows: list[dict[str, Any]], period_days: int) -> dict[
         "league_performance": _league_performance(scored_rows),
         "market_performance": _market_performance(rows),
         "odds_quality_performance": _odds_quality_performance(scored_rows),
+        "clv_performance": _clv_performance(scored_rows),
+        "odds_freshness_performance": _odds_freshness_performance(scored_rows),
         "module_errors": _module_errors(rows),
         "score_buckets": _settled_score_buckets(scored_rows),
         "confidence_bands": _confidence_bands(scored_rows),
@@ -379,6 +381,8 @@ def _empty_performance(period_days: int = DEFAULT_STAT_PERIOD_DAYS) -> dict[str,
         "league_performance": [],
         "market_performance": [],
         "odds_quality_performance": [],
+        "clv_performance": [],
+        "odds_freshness_performance": [],
         "module_errors": [],
         "score_buckets": [],
         "confidence_bands": [],
@@ -470,9 +474,69 @@ def _odds_quality_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]
                 "wins": wins,
                 "hit_rate": wins / len(segment_rows) if segment_rows else 0.0,
                 "roi": profit / stake,
+                "avg_clv": _average_or_none([row.get("avg_clv") for row in segment_rows]),
+                "trusted_clv": _average_or_none([row.get("trusted_clv") for row in segment_rows]),
+                "sharp_anchor_count": sum(1 for row in segment_rows if row.get("has_sharp_anchor")),
             }
         )
     return items
+
+
+def _clv_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        clv_items = (row.get("clv") or {}).get("items") or []
+        for item in clv_items:
+            if item.get("clv") is None:
+                continue
+            grouped.setdefault(str(item.get("market") or "unknown"), []).append(item)
+
+    items: list[dict[str, Any]] = []
+    for market, market_items in grouped.items():
+        clv_values = [float(item["clv"]) for item in market_items if item.get("clv") is not None]
+        trusted_values = [
+            float(item["clv"])
+            for item in market_items
+            if item.get("trusted") and item.get("clv") is not None
+        ]
+        positive_count = sum(1 for value in clv_values if value > 0)
+        items.append(
+            {
+                "market": market,
+                "label": _market_label(market),
+                "count": len(clv_values),
+                "positive_count": positive_count,
+                "hit_rate": positive_count / len(clv_values) if clv_values else 0.0,
+                "positive_rate": positive_count / len(clv_values) if clv_values else 0.0,
+                "avg_clv": round(sum(clv_values) / len(clv_values), 4) if clv_values else None,
+                "trusted_count": len(trusted_values),
+                "trusted_avg_clv": round(sum(trusted_values) / len(trusted_values), 4) if trusted_values else None,
+            }
+        )
+    return sorted(items, key=lambda item: (-int(item["count"]), str(item["market"])))
+
+
+def _odds_freshness_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = _group_rows(rows, "odds_freshness_bucket")
+    order = {"0_30": 0, "31_90": 1, "91_360": 2, "stale": 3, "missing": 4, "unknown": 5}
+    items: list[dict[str, Any]] = []
+    for bucket, bucket_rows in grouped.items():
+        wins = sum(1 for row in bucket_rows if row.get("won"))
+        stake = sum(float(row.get("stake") or 0) for row in bucket_rows) or 1.0
+        profit = sum(float(row.get("profit") or 0) for row in bucket_rows)
+        items.append(
+            {
+                "bucket": bucket,
+                "label": _odds_freshness_label(bucket),
+                "count": len(bucket_rows),
+                "wins": wins,
+                "hit_rate": wins / len(bucket_rows) if bucket_rows else 0.0,
+                "roi": profit / stake,
+                "avg_clv": _average_or_none([row.get("avg_clv") for row in bucket_rows]),
+                "sharp_anchor_count": sum(1 for row in bucket_rows if row.get("has_sharp_anchor")),
+            }
+        )
+    return sorted(items, key=lambda item: (order.get(str(item["bucket"]), 99), -int(item["count"])))
 
 
 def _module_errors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -554,6 +618,13 @@ def _average(values: list[Any]) -> float:
     numbers = [float(value) for value in values if value is not None]
     if not numbers:
         return 0.0
+    return round(sum(numbers) / len(numbers), 4)
+
+
+def _average_or_none(values: list[Any]) -> float | None:
+    numbers = [float(value) for value in values if value is not None]
+    if not numbers:
+        return None
     return round(sum(numbers) / len(numbers), 4)
 
 
@@ -667,6 +738,25 @@ def _localize_settled_item(item: dict[str, Any]) -> dict[str, Any]:
         localized["predicted_side"] = translate_team_name(str(localized["predicted_side"]))
     localized["result_label"] = "命中" if localized.get("hit") else "未中"
     return localized
+
+
+def _market_label(market: str) -> str:
+    return {
+        "moneyline": "\u80dc\u5e73\u8d1f",
+        "totals": "\u5927\u5c0f\u7403",
+        "handicap": "\u8ba9\u7403",
+    }.get(str(market), str(market))
+
+
+def _odds_freshness_label(bucket: str) -> str:
+    return {
+        "0_30": "0-30 \u5206\u949f",
+        "31_90": "31-90 \u5206\u949f",
+        "91_360": "91-360 \u5206\u949f",
+        "stale": "\u8d85\u8fc7 6 \u5c0f\u65f6",
+        "missing": "\u65e0\u76d8\u53e3",
+        "unknown": "\u672a\u77e5",
+    }.get(str(bucket), str(bucket))
 
 
 def _module_label(module: str) -> str:

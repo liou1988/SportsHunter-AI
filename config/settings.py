@@ -303,6 +303,10 @@ class Settings(BaseSettings):
     recommendation_prematch_min_minutes: int = 15
     recommendation_prematch_max_minutes: int = 360
     recommendation_require_odds: bool = True
+    recommendation_require_fresh_odds: bool = True
+    recommendation_max_odds_age_minutes: int = 120
+    recommendation_min_bookmakers: int = 1
+    recommendation_require_sharp_anchor: bool = False
     recommendation_min_market_edge: float = 0.04
     recommendation_min_expected_value: float = 0.0
     recommendation_league_review_days: int = 15

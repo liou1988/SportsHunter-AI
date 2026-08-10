@@ -277,6 +277,10 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}" in text
     assert "RECOMMENDATION_GATE_ENABLED: ${RECOMMENDATION_GATE_ENABLED:-true}" in text
     assert "RECOMMENDATION_ALLOWED_SIGNALS: ${RECOMMENDATION_ALLOWED_SIGNALS:-STRONG_BUY,BUY}" in text
+    assert "RECOMMENDATION_REQUIRE_FRESH_ODDS: ${RECOMMENDATION_REQUIRE_FRESH_ODDS:-true}" in text
+    assert "RECOMMENDATION_MAX_ODDS_AGE_MINUTES: ${RECOMMENDATION_MAX_ODDS_AGE_MINUTES:-120}" in text
+    assert "RECOMMENDATION_MIN_BOOKMAKERS: ${RECOMMENDATION_MIN_BOOKMAKERS:-1}" in text
+    assert "RECOMMENDATION_REQUIRE_SHARP_ANCHOR: ${RECOMMENDATION_REQUIRE_SHARP_ANCHOR:-false}" in text
     assert "RECOMMENDATION_MIN_MARKET_EDGE: ${RECOMMENDATION_MIN_MARKET_EDGE:-0.04}" in text
     assert "MODEL_OPTIMIZER_ENABLED: ${MODEL_OPTIMIZER_ENABLED:-true}" in text
     assert "MODEL_OPTIMIZER_CHECK_HOUR: ${MODEL_OPTIMIZER_CHECK_HOUR:-1}" in text
@@ -300,6 +304,10 @@ def test_env_example_contains_triggered_alert_settings() -> None:
     assert "TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json" in text
     assert "RECOMMENDATION_GATE_ENABLED=true" in text
     assert "RECOMMENDATION_ALLOWED_SIGNALS=STRONG_BUY,BUY" in text
+    assert "RECOMMENDATION_REQUIRE_FRESH_ODDS=true" in text
+    assert "RECOMMENDATION_MAX_ODDS_AGE_MINUTES=120" in text
+    assert "RECOMMENDATION_MIN_BOOKMAKERS=1" in text
+    assert "RECOMMENDATION_REQUIRE_SHARP_ANCHOR=false" in text
     assert "RECOMMENDATION_MIN_MARKET_EDGE=0.04" in text
     assert "MODEL_OPTIMIZER_ENABLED=true" in text
     assert "MODEL_OPTIMIZER_MANUAL_MIN_SAMPLES=20" in text
@@ -1325,6 +1333,26 @@ def test_evaluation_dataset_summarizes_lightweight_odds_context(mock_pipeline) -
     with Session() as session:
         prediction = session.get(Prediction, prediction_id)
         assert prediction is not None
+        market_prediction = dict((prediction.breakdown_json or {}).get("market_prediction") or {})
+        market_prediction["moneyline_pick"] = ""
+        market_prediction["total_goals"] = {
+            "line": 2.5,
+            "pick": "OVER",
+            "label": "\u5927 2.5",
+            "expected_total": 2.9,
+            "confidence": 0.66,
+            "reason": "test",
+            "edge": 0.12,
+            "bookmaker": "EarlyBook",
+            "over_odds": 2.1,
+            "under_odds": 1.7,
+            "market_available": True,
+            "expected_value": 0.08,
+        }
+        prediction.breakdown_json = {
+            **(prediction.breakdown_json or {}),
+            "market_prediction": market_prediction,
+        }
         db_fixture = prediction.fixture
         kickoff = db_fixture.start_time
         if kickoff.tzinfo is None:
@@ -1349,9 +1377,24 @@ def test_evaluation_dataset_summarizes_lightweight_odds_context(mock_pipeline) -
             db_fixture,
             Odds(
                 fixture_id=result.fixture.id,
+                market=OddsMarket.TOTALS,
+                bookmaker="Pinnacle",
+                captured_at=kickoff - timedelta(minutes=20),
+                line=2.5,
+                over=1.90,
+                under=1.90,
+                provider="test",
+                raw={"payload": "z" * 1000},
+            ),
+            stage="closing",
+        )
+        repo.add_odds_snapshot(
+            db_fixture,
+            Odds(
+                fixture_id=result.fixture.id,
                 market=OddsMarket.EUROPEAN,
                 bookmaker="ClosingBook",
-                captured_at=kickoff - timedelta(minutes=20),
+                captured_at=kickoff - timedelta(minutes=10),
                 home=1.9,
                 draw=3.2,
                 away=4.1,
@@ -1365,11 +1408,17 @@ def test_evaluation_dataset_summarizes_lightweight_odds_context(mock_pipeline) -
     rows = EvaluationDataset(session_factory=Session).rows_for_days(3)
 
     assert len(rows) == 1
-    assert rows[0]["odds_snapshot_count"] == 2
+    assert rows[0]["odds_snapshot_count"] == 3
     assert rows[0]["has_closing_odds"] is True
     assert rows[0]["latest_odds_stage"] == "closing"
+    assert rows[0]["odds_freshness_bucket"] == "0_30"
+    assert rows[0]["odds_bookmaker_count"] == 3
+    assert rows[0]["has_sharp_anchor"] is True
+    assert rows[0]["clv"]["count"] == 1
+    assert rows[0]["clv"]["trusted_count"] == 1
+    assert abs(rows[0]["avg_clv"] - 0.1053) < 0.0001
     assert rows[0]["latest_odds_bookmaker"] == "ClosingBook"
-    assert rows[0]["latest_odds_minutes_before_kickoff"] == 20
+    assert rows[0]["latest_odds_minutes_before_kickoff"] == 10
     assert rows[0]["odds_markets"] == ["european", "totals"]
 
 
@@ -1633,6 +1682,35 @@ def test_recommendation_gate_blocks_missing_market_edge() -> None:
     assert "market_edge_too_small" in decision.reasons
 
 
+def test_recommendation_gate_blocks_stale_odds() -> None:
+    pipeline = _fake_recommendation_pipeline()
+    result = pipeline.run_today()[0]
+    now = result.fixture.start_time - timedelta(minutes=30)
+    stale_odds = [
+        Odds(
+            fixture_id=result.fixture.id,
+            market=OddsMarket.EUROPEAN,
+            bookmaker="DebugBook",
+            captured_at=now - timedelta(hours=3),
+            home=1.80,
+            draw=3.50,
+            away=4.50,
+            provider="mock",
+        )
+    ]
+    settings = Settings(
+        data_provider="mock",
+        recommendation_max_odds_age_minutes=60,
+        _env_file=None,
+    )
+
+    decision = RecommendationGate(settings, history_rows=[]).evaluate(result, odds=stale_odds, now=now)
+
+    assert decision.passed is False
+    assert "odds_stale" in decision.reasons
+    assert decision.metrics["odds_quality"]["freshest_age_minutes"] == 180.0
+
+
 def test_api_health() -> None:
     client = TestClient(app)
     response = client.get("/api/health")
@@ -1667,7 +1745,9 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "model-performance-caption" in response.text
     assert "dashboard-summary-link" in response.text
     assert "odds-quality-performance" in response.text
-    assert "20260810-recommendation-gate" in response.text
+    assert "clv-performance" in response.text
+    assert "odds-freshness-performance" in response.text
+    assert "20260810-odds-evidence" in response.text
     assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
@@ -1713,6 +1793,8 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert "analytics" in payload
     assert "performance" in payload["analytics"]
     assert "odds_quality_performance" in payload["analytics"]["performance"]
+    assert "clv_performance" in payload["analytics"]["performance"]
+    assert "odds_freshness_performance" in payload["analytics"]["performance"]
     assert "signal_distribution" in payload["analytics"]
     assert "prediction_trend" in payload["analytics"]
     assert "model_optimizer" in payload
@@ -2393,8 +2475,12 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260810-recommendation-gate" in template
+    assert "20260810-odds-evidence" in template
     assert "odds-quality-performance" in template
+    assert "clv-performance" in template
+    assert "odds-freshness-performance" in template
+    assert "function formatSignedPercent" in script
+    assert "function translateOddsFreshness" in script
 
 def test_provider_debug_api_returns_diagnostic_payload(mock_settings) -> None:
     app.dependency_overrides[provider_router.get_datahub] = lambda: DataHub(MockProvider(mock_settings))

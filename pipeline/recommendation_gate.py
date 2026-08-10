@@ -8,6 +8,7 @@ from typing import Any
 from config.settings import Settings, get_settings
 from datahub.models import Odds, OddsMarket
 from evaluation.dataset import EvaluationDataset
+from evaluation.odds_evidence import summarize_live_odds
 from telegram_bot.localization import translate_league_name
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,18 @@ class RecommendationGate:
         metrics["odds_count"] = len(odds_items)
         if self.settings.recommendation_require_odds and not odds_items:
             reasons.append("odds_missing")
+        odds_quality = summarize_live_odds(
+            odds_items,
+            now=now,
+            max_age_minutes=int(self.settings.recommendation_max_odds_age_minutes),
+        )
+        metrics["odds_quality"] = odds_quality
+        if odds_items and self.settings.recommendation_require_fresh_odds and odds_quality.get("stale"):
+            reasons.append("odds_stale")
+        if odds_items and odds_quality.get("bookmaker_count", 0) < int(self.settings.recommendation_min_bookmakers):
+            reasons.append("odds_bookmaker_coverage_low")
+        if odds_items and self.settings.recommendation_require_sharp_anchor and not odds_quality.get("has_sharp_anchor"):
+            reasons.append("sharp_anchor_missing")
 
         market_evidence = _market_evidence(result, odds_items)
         metrics["market_evidence"] = market_evidence

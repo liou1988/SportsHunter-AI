@@ -436,9 +436,23 @@ function renderAnalytics(analytics) {
   renderBarList("odds-quality-performance", performance.odds_quality_performance || [], {
     label: (item) => item.label || translateOddsQuality(item.segment),
     value: (item) => item.hit_rate,
-    meta: (item) => `${formatNumber(item.wins)} / ${formatNumber(item.count)} 场 · ROI ${formatPercent(item.roi)}`,
+    meta: (item) => `${formatNumber(item.wins)} / ${formatNumber(item.count)} 场 · ROI ${formatPercent(item.roi)} · CLV ${formatSignedPercent(item.avg_clv)}`,
     percentValue: true,
     empty: "暂无盘口质量复盘数据。",
+  });
+  renderBarList("clv-performance", performance.clv_performance || [], {
+    label: (item) => item.label || translateMarket(item.market),
+    value: (item) => item.hit_rate,
+    meta: (item) => `${formatNumber(item.positive_count)} / ${formatNumber(item.count)} 正CLV · 平均 ${formatSignedPercent(item.avg_clv)} · 可信 ${formatNumber(item.trusted_count)}`,
+    percentValue: true,
+    empty: "暂无CLV复盘数据。",
+  });
+  renderBarList("odds-freshness-performance", performance.odds_freshness_performance || [], {
+    label: (item) => item.label || translateOddsFreshness(item.bucket),
+    value: (item) => item.hit_rate,
+    meta: (item) => `${formatNumber(item.wins)} / ${formatNumber(item.count)} 场 · ROI ${formatPercent(item.roi)} · CLV ${formatSignedPercent(item.avg_clv)}`,
+    percentValue: true,
+    empty: "暂无盘口新鲜度复盘数据。",
   });
   renderRankList("league-performance", performance.league_performance || []);
 }
@@ -912,6 +926,18 @@ function translateOddsQuality(value) {
   return map[String(value)] || value;
 }
 
+function translateOddsFreshness(value) {
+  const map = {
+    "0_30": "0-30 分钟",
+    "31_90": "31-90 分钟",
+    "91_360": "91-360 分钟",
+    stale: "超过 6 小时",
+    missing: "无盘口",
+    unknown: "未知",
+  };
+  return map[String(value)] || value;
+}
+
 function translateStage(value) {
   const map = {
     fixtures: "赛程采集",
@@ -1036,6 +1062,13 @@ function formatPercent(value) {
   const number = Number(value);
   if (Number.isNaN(number)) return String(value);
   return `${(number * 100).toFixed(0)}%`;
+}
+
+function formatSignedPercent(value) {
+  if (value === null || value === undefined || value === "") return "\u6682\u65e0";
+  const number = Number(value);
+  if (Number.isNaN(number)) return String(value);
+  return `${number >= 0 ? "+" : "-"}${(Math.abs(number) * 100).toFixed(1).replace(/\.0$/, "")}%`;
 }
 
 function formatStake(value) {
