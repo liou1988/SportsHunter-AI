@@ -6,11 +6,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from config.settings import Settings, get_settings
 from datahub.models import OddsMarket, to_plain_dict
 from pipeline.archive import PredictionArchive
+from pipeline.filters import is_prediction_candidate_fixture
 from pipeline.models import PredictionResult
 from pipeline.recommendation_gate import RecommendationGate
 from pipeline.runner import PredictionPipeline
@@ -26,8 +26,14 @@ from telegram_bot.recommendations import _send_with_result, format_market_predic
 
 logger = logging.getLogger(__name__)
 
-BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 ALERT_FIXTURE_STATUSES = {"scheduled", "unknown"}
+ODDS_DEPENDENT_GATE_REASONS = {
+    "odds_missing",
+    "odds_stale",
+    "odds_bookmaker_coverage_low",
+    "sharp_anchor_missing",
+    "market_edge_too_small",
+}
 
 
 @dataclass(slots=True)
@@ -228,18 +234,26 @@ class RecommendationAlertPusher:
     def _passes_recommendation_gate(self, result: PredictionResult, now: datetime) -> bool:
         odds = list(getattr(result, "odds", []) or [])
         if not odds:
+            preliminary = self.gate.evaluate(result, odds=[], now=now)
+            if _has_non_odds_gate_blocker(preliminary):
+                self._log_gate_blocked(result, preliminary)
+                return False
             odds = _load_fixture_odds(self.pipeline, result.fixture.id)
         decision = self.gate.evaluate(result, odds=odds, now=now)
         if not decision.passed:
-            logger.info(
-                "telegram alert recommendation gate blocked fixture",
-                extra={
-                    "fixture_id": result.fixture.id,
-                    "reasons": decision.reasons,
-                    "metrics": decision.metrics,
-                },
-            )
+            self._log_gate_blocked(result, decision)
         return decision.passed
+
+    @staticmethod
+    def _log_gate_blocked(result: PredictionResult, decision: Any) -> None:
+        logger.info(
+            "telegram alert recommendation gate blocked fixture",
+            extra={
+                "fixture_id": result.fixture.id,
+                "reasons": decision.reasons,
+                "metrics": decision.metrics,
+            },
+        )
 
     @staticmethod
     def _alert_key(result: PredictionResult) -> str:
@@ -315,13 +329,15 @@ def _is_unstarted_alert_fixture(fixture: Any, now: datetime | None = None) -> bo
     if start_time is None:
         return False
     now = _as_utc(now) or datetime.now(timezone.utc)
-    if start_time.astimezone(BEIJING_TZ).date() != now.astimezone(BEIJING_TZ).date():
-        return False
     if start_time < now:
         return False
     raw_status = getattr(fixture, "status", "unknown")
     status = str(getattr(raw_status, "value", raw_status)).lower()
-    return status in ALERT_FIXTURE_STATUSES
+    return status in ALERT_FIXTURE_STATUSES and is_prediction_candidate_fixture(fixture, now)
+
+
+def _has_non_odds_gate_blocker(decision: Any) -> bool:
+    return any(reason not in ODDS_DEPENDENT_GATE_REASONS for reason in decision.reasons)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

@@ -68,7 +68,7 @@ from dashboard import service as dashboard_service
 from scheduler import jobs
 from scheduler.runner import create_scheduler
 from telegram_bot import localization as localization_module
-from telegram_bot.alerts import AlertArchive, RecommendationAlertPusher, format_recommendation_alert_message
+from telegram_bot.alerts import AlertArchive, RecommendationAlertPusher, _is_unstarted_alert_fixture, format_recommendation_alert_message
 from telegram_bot.fixtures import format_fixtures_message
 from telegram_bot.localization import translate_match_text, translate_team_name
 from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
@@ -2358,6 +2358,100 @@ def test_telegram_alert_pusher_skips_already_started_matches(tmp_path) -> None:
     assert result.pushed_count == 1
     assert len(sent_messages) == 1
     assert [item.fixture.id for item in prediction_archive.saved] == ["buy"]
+
+
+def test_telegram_alert_fixture_allows_nearby_next_beijing_day_match() -> None:
+    now = datetime(2026, 8, 11, 15, 30, tzinfo=timezone.utc)
+    league = League(id="debug-league", name="Debug League", provider="mock")
+    home = Team(id="home", name="Debug Home", provider="mock")
+    away = Team(id="away", name="Debug Away", provider="mock")
+
+    def fixture(fixture_id: str, start_time: datetime) -> Fixture:
+        return Fixture(
+            id=fixture_id,
+            league=league,
+            home_team=home,
+            away_team=away,
+            start_time=start_time,
+            status=FixtureStatus.SCHEDULED,
+            provider="mock",
+        )
+
+    nearby_next_day = fixture("nearby", now + timedelta(hours=2))
+    far_next_day = fixture("far", now + timedelta(hours=8))
+
+    assert _is_unstarted_alert_fixture(nearby_next_day, now) is True
+    assert _is_unstarted_alert_fixture(far_next_day, now) is False
+
+
+def test_telegram_alert_pusher_skips_odds_load_for_non_actionable_gate_block(tmp_path) -> None:
+    import asyncio
+
+    league = League(id="debug-league", name="Debug League", provider="mock")
+    home = Team(id="home", name="Debug Home", provider="mock")
+    away = Team(id="away", name="Debug Away", provider="mock")
+    fixture = Fixture(
+        id="watch-low",
+        league=league,
+        home_team=home,
+        away_team=away,
+        start_time=_future_beijing_today_start(),
+        status=FixtureStatus.SCHEDULED,
+        provider="mock",
+    )
+    result = _fake_prediction_result(fixture, 62.0, "WATCH", 0.25)
+
+    class CountingDataHub:
+        calls = 0
+
+        def get_odds(self, fixture_id: str) -> list[Odds]:
+            self.calls += 1
+            return [
+                Odds(
+                    fixture_id=fixture_id,
+                    market=OddsMarket.EUROPEAN,
+                    bookmaker="DebugBook",
+                    home=1.8,
+                    draw=3.5,
+                    away=4.5,
+                    provider="mock",
+                )
+            ]
+
+    datahub = CountingDataHub()
+
+    class LowSignalPipeline:
+        context = SimpleNamespace(datahub=datahub)
+
+        def run_today(self) -> list:
+            return [result]
+
+    class FakeNotifier:
+        async def send_message_with_result(self, text: str) -> TelegramSendResult:
+            raise AssertionError("non-actionable alert should not be sent")
+
+    settings = Settings(
+        data_provider="mock",
+        telegram_alert_signals=["WATCH"],
+        telegram_alert_archive_path=tmp_path / "alerts.json",
+        _env_file=None,
+    )
+    pusher = RecommendationAlertPusher(
+        pipeline=LowSignalPipeline(),
+        notifier=FakeNotifier(),
+        archive=AlertArchive(settings.telegram_alert_archive_path),
+        prediction_archive=_FakePredictionArchive(),
+        settings=settings,
+        gate=RecommendationGate(settings, history_rows=[]),
+    )
+
+    push_result = asyncio.run(pusher.push_new())
+
+    assert push_result.success is True
+    assert push_result.sent is False
+    assert push_result.evaluated_count == 1
+    assert push_result.eligible_count == 0
+    assert datahub.calls == 0
 
 
 def test_telegram_alert_message_formats_single_prediction() -> None:
