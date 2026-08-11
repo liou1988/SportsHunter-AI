@@ -209,6 +209,7 @@ def test_settings_default_recommendation_gate_is_sample_mode() -> None:
     assert settings.recommendation_allowed_signals == ["WATCH", "BUY", "STRONG_BUY"]
     assert settings.recommendation_min_score == 62.0
     assert settings.recommendation_min_confidence == 0.60
+    assert settings.recommendation_require_league_performance is False
     assert settings.recommendation_league_min_samples == 20
     assert settings.recommendation_league_min_roi == -0.30
 
@@ -294,6 +295,7 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "RECOMMENDATION_MIN_BOOKMAKERS: ${RECOMMENDATION_MIN_BOOKMAKERS:-1}" in text
     assert "RECOMMENDATION_REQUIRE_SHARP_ANCHOR: ${RECOMMENDATION_REQUIRE_SHARP_ANCHOR:-false}" in text
     assert "RECOMMENDATION_MIN_MARKET_EDGE: ${RECOMMENDATION_MIN_MARKET_EDGE:-0.04}" in text
+    assert "RECOMMENDATION_REQUIRE_LEAGUE_PERFORMANCE: ${RECOMMENDATION_REQUIRE_LEAGUE_PERFORMANCE:-false}" in text
     assert "RECOMMENDATION_LEAGUE_MIN_SAMPLES: ${RECOMMENDATION_LEAGUE_MIN_SAMPLES:-20}" in text
     assert "RECOMMENDATION_LEAGUE_MIN_ROI: ${RECOMMENDATION_LEAGUE_MIN_ROI:--0.30}" in text
     assert "MODEL_OPTIMIZER_ENABLED: ${MODEL_OPTIMIZER_ENABLED:-true}" in text
@@ -325,6 +327,7 @@ def test_env_example_contains_triggered_alert_settings() -> None:
     assert "RECOMMENDATION_MIN_BOOKMAKERS=1" in text
     assert "RECOMMENDATION_REQUIRE_SHARP_ANCHOR=false" in text
     assert "RECOMMENDATION_MIN_MARKET_EDGE=0.04" in text
+    assert "RECOMMENDATION_REQUIRE_LEAGUE_PERFORMANCE=false" in text
     assert "RECOMMENDATION_LEAGUE_MIN_SAMPLES=20" in text
     assert "RECOMMENDATION_LEAGUE_MIN_ROI=-0.30" in text
     assert "MODEL_OPTIMIZER_ENABLED=true" in text
@@ -1703,6 +1706,7 @@ def test_recommendation_gate_blocks_watch_and_weak_league() -> None:
     now = buy.fixture.start_time - timedelta(minutes=30)
     settings = Settings(data_provider="mock", _env_file=None)
     strict_settings = Settings(data_provider="mock", recommendation_allowed_signals=["STRONG_BUY", "BUY"], _env_file=None)
+    league_gate_settings = Settings(data_provider="mock", recommendation_require_league_performance=True, _env_file=None)
 
     watch_decision = RecommendationGate(strict_settings, history_rows=[]).evaluate(watch, odds=odds, now=now)
     assert watch_decision.passed is False
@@ -1712,7 +1716,7 @@ def test_recommendation_gate_blocks_watch_and_weak_league() -> None:
         {"league": "Debug League", "actionable": True, "won": False, "stake": 1, "profit": -1}
         for _ in range(settings.recommendation_league_min_samples)
     ]
-    weak_league_decision = RecommendationGate(settings, history_rows=weak_rows).evaluate(buy, odds=odds, now=now)
+    weak_league_decision = RecommendationGate(league_gate_settings, history_rows=weak_rows).evaluate(buy, odds=odds, now=now)
     assert weak_league_decision.passed is False
     assert "league_recent_performance_weak" in weak_league_decision.reasons
 

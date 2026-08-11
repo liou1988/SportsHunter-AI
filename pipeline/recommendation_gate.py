@@ -112,7 +112,7 @@ class RecommendationGate:
 
         league_stats = self._league_stats_for_result(result)
         metrics["league_stats"] = league_stats
-        if _is_league_underperforming(
+        if self.settings.recommendation_require_league_performance and _is_league_underperforming(
             league_stats,
             min_samples=int(self.settings.recommendation_league_min_samples),
             min_hit_rate=float(self.settings.recommendation_league_min_hit_rate),

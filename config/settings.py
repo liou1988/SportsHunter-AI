@@ -310,6 +310,7 @@ class Settings(BaseSettings):
     recommendation_min_market_edge: float = 0.04
     recommendation_min_expected_value: float = 0.0
     recommendation_league_review_days: int = 15
+    recommendation_require_league_performance: bool = False
     recommendation_league_min_samples: int = 20
     recommendation_league_min_hit_rate: float = 0.40
     recommendation_league_min_roi: float = -0.30
