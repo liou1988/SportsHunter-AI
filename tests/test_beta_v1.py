@@ -204,6 +204,15 @@ def test_settings_default_telegram_alert_signals_include_watch() -> None:
     assert settings.telegram_alert_signals == ["STRONG_BUY", "BUY", "WATCH"]
 
 
+def test_settings_default_recommendation_gate_is_sample_mode() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.recommendation_allowed_signals == ["WATCH", "BUY", "STRONG_BUY"]
+    assert settings.recommendation_min_score == 62.0
+    assert settings.recommendation_min_confidence == 0.60
+    assert settings.recommendation_league_min_samples == 20
+    assert settings.recommendation_league_min_roi == -0.30
+
+
 def test_env_example_defaults_to_free_provider() -> None:
     text = Path(".env.example").read_text(encoding="utf-8")
     assert "DATA_PROVIDER=free" in text
@@ -277,12 +286,16 @@ def test_docker_compose_allows_telegram_env_override() -> None:
     assert "TELEGRAM_ALERT_INTERVAL_MINUTES: ${TELEGRAM_ALERT_INTERVAL_MINUTES:-5}" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH: ${TELEGRAM_ALERT_ARCHIVE_PATH:-/app/reports/telegram_alerts.json}" in text
     assert "RECOMMENDATION_GATE_ENABLED: ${RECOMMENDATION_GATE_ENABLED:-true}" in text
-    assert "RECOMMENDATION_ALLOWED_SIGNALS: ${RECOMMENDATION_ALLOWED_SIGNALS:-STRONG_BUY,BUY}" in text
+    assert "RECOMMENDATION_ALLOWED_SIGNALS: ${RECOMMENDATION_ALLOWED_SIGNALS:-WATCH,BUY,STRONG_BUY}" in text
+    assert "RECOMMENDATION_MIN_SCORE: ${RECOMMENDATION_MIN_SCORE:-62}" in text
+    assert "RECOMMENDATION_MIN_CONFIDENCE: ${RECOMMENDATION_MIN_CONFIDENCE:-0.60}" in text
     assert "RECOMMENDATION_REQUIRE_FRESH_ODDS: ${RECOMMENDATION_REQUIRE_FRESH_ODDS:-true}" in text
     assert "RECOMMENDATION_MAX_ODDS_AGE_MINUTES: ${RECOMMENDATION_MAX_ODDS_AGE_MINUTES:-120}" in text
     assert "RECOMMENDATION_MIN_BOOKMAKERS: ${RECOMMENDATION_MIN_BOOKMAKERS:-1}" in text
     assert "RECOMMENDATION_REQUIRE_SHARP_ANCHOR: ${RECOMMENDATION_REQUIRE_SHARP_ANCHOR:-false}" in text
     assert "RECOMMENDATION_MIN_MARKET_EDGE: ${RECOMMENDATION_MIN_MARKET_EDGE:-0.04}" in text
+    assert "RECOMMENDATION_LEAGUE_MIN_SAMPLES: ${RECOMMENDATION_LEAGUE_MIN_SAMPLES:-20}" in text
+    assert "RECOMMENDATION_LEAGUE_MIN_ROI: ${RECOMMENDATION_LEAGUE_MIN_ROI:--0.30}" in text
     assert "MODEL_OPTIMIZER_ENABLED: ${MODEL_OPTIMIZER_ENABLED:-true}" in text
     assert "MODEL_OPTIMIZER_CHECK_HOUR: ${MODEL_OPTIMIZER_CHECK_HOUR:-1}" in text
     assert "MODEL_OPTIMIZER_CHECK_MINUTE: ${MODEL_OPTIMIZER_CHECK_MINUTE:-20}" in text
@@ -304,12 +317,16 @@ def test_env_example_contains_triggered_alert_settings() -> None:
     assert "TELEGRAM_ALERT_RETENTION_DAYS=7" in text
     assert "TELEGRAM_ALERT_ARCHIVE_PATH=reports/telegram_alerts.json" in text
     assert "RECOMMENDATION_GATE_ENABLED=true" in text
-    assert "RECOMMENDATION_ALLOWED_SIGNALS=STRONG_BUY,BUY" in text
+    assert "RECOMMENDATION_ALLOWED_SIGNALS=WATCH,BUY,STRONG_BUY" in text
+    assert "RECOMMENDATION_MIN_SCORE=62" in text
+    assert "RECOMMENDATION_MIN_CONFIDENCE=0.60" in text
     assert "RECOMMENDATION_REQUIRE_FRESH_ODDS=true" in text
     assert "RECOMMENDATION_MAX_ODDS_AGE_MINUTES=120" in text
     assert "RECOMMENDATION_MIN_BOOKMAKERS=1" in text
     assert "RECOMMENDATION_REQUIRE_SHARP_ANCHOR=false" in text
     assert "RECOMMENDATION_MIN_MARKET_EDGE=0.04" in text
+    assert "RECOMMENDATION_LEAGUE_MIN_SAMPLES=20" in text
+    assert "RECOMMENDATION_LEAGUE_MIN_ROI=-0.30" in text
     assert "MODEL_OPTIMIZER_ENABLED=true" in text
     assert "MODEL_OPTIMIZER_MANUAL_MIN_SAMPLES=20" in text
     assert "MODEL_OPTIMIZER_AUTO_APPLY_ENABLED=true" in text
@@ -1685,8 +1702,9 @@ def test_recommendation_gate_blocks_watch_and_weak_league() -> None:
     odds = pipeline.context.datahub.get_odds(buy.fixture.id)
     now = buy.fixture.start_time - timedelta(minutes=30)
     settings = Settings(data_provider="mock", _env_file=None)
+    strict_settings = Settings(data_provider="mock", recommendation_allowed_signals=["STRONG_BUY", "BUY"], _env_file=None)
 
-    watch_decision = RecommendationGate(settings, history_rows=[]).evaluate(watch, odds=odds, now=now)
+    watch_decision = RecommendationGate(strict_settings, history_rows=[]).evaluate(watch, odds=odds, now=now)
     assert watch_decision.passed is False
     assert "signal_not_actionable" in watch_decision.reasons
 
@@ -2299,13 +2317,13 @@ def test_telegram_alert_pusher_sends_only_new_suitable_matches(tmp_path) -> None
     assert first.success is True
     assert first.sent is True
     assert first.evaluated_count == 4
-    assert first.eligible_count == 2
-    assert first.pushed_count == 2
+    assert first.eligible_count == 3
+    assert first.pushed_count == 3
     assert second.success is True
     assert second.sent is False
     assert second.pushed_count == 0
-    assert second.skipped_count == 2
-    assert len(sent_messages) == 2
+    assert second.skipped_count == 3
+    assert len(sent_messages) == 3
     assert all("SportsHunter AI 发现合适比赛" in message for message in sent_messages)
 
 
@@ -2399,7 +2417,7 @@ def test_telegram_alert_pusher_skips_odds_load_for_non_actionable_gate_block(tmp
         status=FixtureStatus.SCHEDULED,
         provider="mock",
     )
-    result = _fake_prediction_result(fixture, 62.0, "WATCH", 0.25)
+    result = _fake_prediction_result(fixture, 61.0, "WATCH", 0.25)
 
     class CountingDataHub:
         calls = 0
@@ -2510,8 +2528,8 @@ def test_telegram_alert_check_api_pushes_new_recommendations(monkeypatch, tmp_pa
     payload = response.json()
     assert payload["success"] is True
     assert payload["sent"] is True
-    assert payload["pushed_count"] == 2
-    assert len(sent_messages) == 2
+    assert payload["pushed_count"] == 3
+    assert len(sent_messages) == 3
 
 
 def test_scheduler_registers_triggered_telegram_alert_job() -> None:
