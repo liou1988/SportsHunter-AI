@@ -10,6 +10,8 @@ const state = {
   recommendationTimeFilter: "all",
 };
 
+const DASHBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
 const $ = (id) => document.getElementById(id);
 
 async function fetchJson(url, options = {}) {
@@ -1134,5 +1136,11 @@ $("recommendation-time-filter").addEventListener("change", (event) => {
   renderRecommendations(state.recommendationItems);
 });
 $("recommendation-export-button").addEventListener("click", exportCurrentRecommendations);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshDashboard();
+});
+window.setInterval(() => {
+  if (!document.hidden) refreshDashboard();
+}, DASHBOARD_REFRESH_INTERVAL_MS);
 renderPeriodControls();
 refreshDashboard();

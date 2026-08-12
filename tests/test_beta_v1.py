@@ -1818,6 +1818,15 @@ def test_dashboard_page_serves_operations_console() -> None:
 
 
 
+def test_dashboard_script_auto_refreshes_visible_page() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+
+    assert "DASHBOARD_REFRESH_INTERVAL_MS" in script
+    assert "visibilitychange" in script
+    assert "window.setInterval" in script
+    assert "!document.hidden" in script
+
+
 def test_dashboard_latest_predictions_include_kickoff(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
