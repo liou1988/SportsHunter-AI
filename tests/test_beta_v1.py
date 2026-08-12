@@ -1805,7 +1805,7 @@ def test_dashboard_page_serves_operations_console() -> None:
     assert "odds-quality-performance" in response.text
     assert "clv-performance" in response.text
     assert "odds-freshness-performance" in response.text
-    assert "20260810-odds-evidence" in response.text
+    assert "20260812-dashboard-refresh" in response.text
     assert "&#26102;&#38388;" in response.text
     assert "体育预测运行看板" in response.text
     assert "检查数据源" in response.text
@@ -2689,7 +2689,7 @@ def test_dashboard_frontend_localizes_legacy_report_league_names() -> None:
     assert "target[translateLeagueName(name.trim())]" in script
     assert "Argentine Liga Profesional de Futbol" in script
     assert "\\u963f\\u6839\\u5ef7\\u7532\\u7ea7\\u8054\\u8d5b" in script
-    assert "20260810-odds-evidence" in template
+    assert "20260812-dashboard-refresh" in template
     assert "odds-quality-performance" in template
     assert "clv-performance" in template
     assert "odds-freshness-performance" in template
