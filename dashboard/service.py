@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,6 @@ from database.repositories import DashboardRepository
 from database.session import SessionLocal
 from datahub.hub import DataHub
 from datahub.models import Fixture, Odds, OddsMarket, to_plain_dict
-from evaluation.dataset import EvaluationDataset
 from evaluation.metrics import calculate_metrics
 from evaluation.runner import EvaluationRunner
 from optimizer.engine import ModelOptimizer
@@ -41,16 +41,24 @@ def build_dashboard_summary(
     settings = settings or get_settings()
     period_days = _normalize_period_days(period_days)
     database = _database_status(period_days)
+    recommendations = _archived_recommendation_status(database)
+    model_optimizer = _cached_model_optimizer_status(settings)
+    reports = _report_status(settings, period_days)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "period_days": period_days,
         "period_options": list(STAT_PERIOD_OPTIONS),
         "provider": _provider_status(datahub),
         "database": database,
-        "recommendations": _archived_recommendation_status(database),
-        "analytics": _analytics_status(database, period_days),
-        "model_optimizer": _cached_model_optimizer_status(settings),
-        "reports": _report_status(settings, period_days),
+        "recommendations": recommendations,
+        "analytics": _analytics_status(
+            database,
+            period_days,
+            model_optimizer=model_optimizer,
+            reports=reports,
+        ),
+        "model_optimizer": model_optimizer,
+        "reports": reports,
     }
 
 
@@ -300,17 +308,159 @@ def _report_status(settings: Settings, period_days: int) -> dict[str, Any]:
     }
 
 
-def _analytics_status(database: dict[str, Any], period_days: int) -> dict[str, Any]:
+def _analytics_status(
+    database: dict[str, Any],
+    period_days: int,
+    *,
+    model_optimizer: dict[str, Any] | None = None,
+    reports: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     analytics = {**_empty_analytics(period_days), **dict(database.get("analytics") or {})}
     analytics["period_days"] = period_days
-    try:
-        rows = EvaluationDataset().rows_for_days(period_days)
-        analytics["performance"] = _performance_snapshot(rows, period_days)
-    except Exception as exc:  # noqa: BLE001 - dashboard can still show operational status
-        logger.warning("dashboard performance analytics unavailable: %s", exc)
-        analytics["performance"] = _empty_performance(period_days)
-        analytics["error"] = str(exc)
+    analytics["performance"] = _cached_performance_snapshot(
+        period_days,
+        model_optimizer=model_optimizer,
+        reports=reports,
+    )
     return analytics
+
+
+def _cached_performance_snapshot(
+    period_days: int,
+    *,
+    model_optimizer: dict[str, Any] | None = None,
+    reports: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = _empty_performance(period_days)
+    report_values = _performance_values_from_report(reports)
+    if report_values:
+        snapshot.update(report_values)
+        snapshot["source"] = "cached_report"
+        return snapshot
+
+    optimizer_values = _performance_values_from_optimizer(model_optimizer)
+    if optimizer_values:
+        snapshot.update(optimizer_values)
+        snapshot["source"] = "model_optimizer_cache"
+        return snapshot
+
+    snapshot["source"] = "empty"
+    return snapshot
+
+
+def _performance_values_from_report(reports: dict[str, Any] | None) -> dict[str, Any]:
+    content = _report_content(reports)
+    if not content:
+        return {}
+
+    settled_count = _parse_report_int(_report_line_value(content, "\u5df2\u7ed3\u7b97\u9884\u6d4b"))
+    hunter_hit_rate = _parse_report_percent(_report_line_value(content, "Hunter \u8bc4\u5206\u547d\u4e2d\u7387"))
+    signal_hit_rate = _parse_report_percent(_report_line_value(content, "\u4fe1\u53f7\u547d\u4e2d\u7387"))
+    roi = _parse_report_percent(_report_line_value(content, "ROI"))
+    calibration_error = _parse_report_float(_report_line_value(content, "\u4fe1\u5fc3\u6821\u51c6\u8bef\u5dee"))
+    hit_rate = signal_hit_rate if signal_hit_rate is not None else hunter_hit_rate
+
+    if settled_count is None and hit_rate is None and roi is None and calibration_error is None:
+        return {}
+
+    wins = round(settled_count * hit_rate) if settled_count is not None and hit_rate is not None else 0
+    losses = max(0, settled_count - wins) if settled_count is not None else 0
+    return {
+        "settled_count": settled_count or 0,
+        "actionable_count": settled_count or 0,
+        "wins": wins,
+        "losses": losses,
+        "hit_rate": hit_rate or 0.0,
+        "roi": roi or 0.0,
+        "calibration_error": calibration_error or 0.0,
+    }
+
+
+def _performance_values_from_optimizer(model_optimizer: dict[str, Any] | None) -> dict[str, Any]:
+    payload = _optimizer_report_payload(model_optimizer)
+    if not payload:
+        return {}
+
+    sample_count = _coerce_int(payload.get("sample_count"))
+    wins = _coerce_int(payload.get("wins"))
+    losses = _coerce_int(payload.get("losses"))
+    hit_rate = _coerce_float(payload.get("hit_rate"))
+    roi = _coerce_float(payload.get("roi"))
+    calibration_error = _coerce_float(payload.get("confidence_error"))
+    if sample_count is None and wins is None and losses is None and hit_rate is None:
+        return {}
+
+    settled_count = sample_count or (wins or 0) + (losses or 0)
+    return {
+        "settled_count": settled_count,
+        "actionable_count": settled_count,
+        "wins": wins or 0,
+        "losses": losses or 0,
+        "hit_rate": hit_rate or 0.0,
+        "roi": roi or 0.0,
+        "calibration_error": calibration_error or 0.0,
+    }
+
+
+def _report_content(reports: dict[str, Any] | None) -> str:
+    if not isinstance(reports, dict):
+        return ""
+    for key in ("evaluation_report", "daily_report"):
+        payload = reports.get(key)
+        if isinstance(payload, dict) and payload.get("content"):
+            return str(payload.get("content") or "")
+    return ""
+
+
+def _optimizer_report_payload(model_optimizer: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(model_optimizer, dict):
+        return {}
+    if isinstance(model_optimizer.get("report"), dict):
+        return dict(model_optimizer["report"])
+    applied = model_optimizer.get("applied")
+    if isinstance(applied, dict) and isinstance(applied.get("report"), dict):
+        return dict(applied["report"])
+    return dict(model_optimizer)
+
+
+def _report_line_value(content: str, label: str) -> str | None:
+    match = re.search(rf"^\s*-\s*{re.escape(label)}\s*[:\uff1a]\s*([^\n]+)", content, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _parse_report_int(value: str | None) -> int | None:
+    number = _parse_report_float(value)
+    return int(number) if number is not None else None
+
+
+def _parse_report_percent(value: str | None) -> float | None:
+    number = _parse_report_float(value)
+    if number is None:
+        return None
+    return number / 100 if "%" in str(value) else number
+
+
+def _parse_report_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    match = re.search(r"-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?", str(value))
+    if not match:
+        return None
+    return _coerce_float(match.group(0).replace(",", ""))
+
+
+def _coerce_int(value: Any) -> int | None:
+    number = _coerce_float(value)
+    return int(number) if number is not None else None
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _localize_analytics(analytics: dict[str, Any]) -> dict[str, Any]:

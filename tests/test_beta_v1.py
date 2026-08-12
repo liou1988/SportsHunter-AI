@@ -1878,6 +1878,59 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert payload["reports"]["period_days"] == 7
 
 
+def test_dashboard_summary_uses_cached_performance_without_live_dataset(monkeypatch, mock_settings) -> None:
+    class ExplodingEvaluationDataset:
+        def rows_for_days(self, days: int) -> list[dict]:
+            raise AssertionError("summary should not recompute evaluation rows")
+
+    def fail_performance_snapshot(rows: list[dict], period_days: int) -> dict:
+        raise AssertionError("summary should not rebuild performance snapshots")
+
+    monkeypatch.setattr(dashboard_service, "EvaluationDataset", ExplodingEvaluationDataset, raising=False)
+    monkeypatch.setattr(dashboard_service, "_performance_snapshot", fail_performance_snapshot)
+    app.dependency_overrides[dashboard_get_datahub] = lambda: DataHub(MockProvider(mock_settings))
+    try:
+        response = TestClient(app).get("/api/dashboard/summary?period_days=30")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analytics"]["performance"]["period_days"] == 30
+    assert payload["analytics"]["performance"]["source"] in {
+        "cached_report",
+        "model_optimizer_cache",
+        "empty",
+    }
+
+
+def test_cached_performance_snapshot_reads_evaluation_report() -> None:
+    report_content = "\n".join(
+        [
+            "# SportsHunter-AI report",
+            "- \u5df2\u7ed3\u7b97\u9884\u6d4b\uff1a21",
+            "- Hunter \u8bc4\u5206\u547d\u4e2d\u7387\uff1a38.10%",
+            "- \u4fe1\u53f7\u547d\u4e2d\u7387\uff1a42.86%",
+            "- \u4fe1\u5fc3\u6821\u51c6\u8bef\u5dee\uff1a0.2786",
+            "- ROI: -14.29%",
+        ]
+    )
+
+    payload = dashboard_service._cached_performance_snapshot(
+        15,
+        reports={"evaluation_report": {"content": report_content}},
+    )
+
+    assert payload["source"] == "cached_report"
+    assert payload["period_days"] == 15
+    assert payload["settled_count"] == 21
+    assert payload["wins"] == 9
+    assert payload["losses"] == 12
+    assert payload["hit_rate"] == 0.4286
+    assert payload["roi"] == -0.1429
+    assert payload["calibration_error"] == 0.2786
+
+
 def test_dashboard_provider_status_does_not_deep_scan_provider() -> None:
     class SlowDataHub:
         provider = SimpleNamespace(name="slow-provider", last_health=None)
