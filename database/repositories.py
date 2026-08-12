@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from database import models as orm
 from datahub import models as hub
@@ -226,6 +226,14 @@ class SportsRepository:
             select(orm.Prediction, orm.Fixture, orm.MatchResult)
             .join(orm.Fixture, orm.Prediction.fixture_id == orm.Fixture.id)
             .join(orm.MatchResult, orm.MatchResult.fixture_id == orm.Fixture.id)
+            .options(
+                selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.league),
+                selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.home_team),
+                selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.away_team),
+                selectinload(orm.Fixture.league),
+                selectinload(orm.Fixture.home_team),
+                selectinload(orm.Fixture.away_team),
+            )
             .order_by(orm.MatchResult.settled_at.desc(), orm.Prediction.created_at.desc())
         )
         if since is not None:
@@ -240,6 +248,11 @@ class SportsRepository:
         query = (
             select(orm.Prediction)
             .where(orm.Prediction.created_at >= _beijing_day_start_utc())
+            .options(
+                selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.league),
+                selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.home_team),
+                selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.away_team),
+            )
             .order_by(desc(orm.Prediction.created_at), desc(orm.Prediction.id))
         )
         candidates = list(self.session.scalars(query.limit(max(limit * 20, limit))))
@@ -470,6 +483,11 @@ class DashboardRepository:
             self.session.scalars(
                 select(orm.Prediction)
                 .where(orm.Prediction.created_at >= since)
+                .options(
+                    selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.league),
+                    selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.home_team),
+                    selectinload(orm.Prediction.fixture).selectinload(orm.Fixture.away_team),
+                )
                 .order_by(orm.Prediction.created_at.asc())
             )
         )
