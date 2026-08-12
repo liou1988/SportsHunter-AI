@@ -55,6 +55,7 @@ from features.models import FeatureVector
 from features.pipeline import FeatureBuilder
 from api import dependencies
 from api.services.recommendations import (
+    build_alerted_recommendations,
     build_archived_recommendations,
     build_recommendations_export_csv,
     build_today_recommendations,
@@ -1094,6 +1095,47 @@ def test_archived_recommendations_read_from_prediction_archive(mock_pipeline) ->
 
 
 
+def test_alerted_recommendations_include_pushed_started_fixture(mock_pipeline, tmp_path) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, future=True)
+    result = mock_pipeline.run_today()[0]
+    result.fixture.start_time = _recent_beijing_today_start(minutes=90)
+    result.fixture.status = FixtureStatus.SCHEDULED
+    PredictionArchive(session_factory=Session).save_if_changed(result)
+    alert_path = tmp_path / "alerts.json"
+    alert_path.write_text(
+        json.dumps(
+            {
+                f"mock:{result.fixture.id}:WATCH": {
+                    "fixture_id": str(result.fixture.id),
+                    "signal": result.signal.signal.value,
+                    "hunter_score": result.hunter_score.score,
+                    "confidence": result.hunter_score.confidence,
+                    "message_id": 99,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    alerted = build_alerted_recommendations(alert_path, include_pass=True, session_factory=Session)
+    archived = build_archived_recommendations(
+        include_pass=True,
+        session_factory=Session,
+        alert_archive_path=alert_path,
+    )
+
+    assert alerted["source"] == "telegram_alert_archive"
+    assert alerted["count"] == 1
+    assert "对阵" in alerted["items"][0]["match"]
+    assert alerted["items"][0]["score_prediction"]["text"] == result.market_prediction.score.text
+    assert alerted["items"][0]["alert_message_id"] == 99
+    assert archived["source"] == "telegram_alert_archive+predictions_archive"
+    assert archived["count"] == 1
+
+
 def test_archived_recommendations_skip_settled_fixtures(mock_pipeline) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -1855,7 +1897,11 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     payload = response.json()
     assert payload["provider"]["provider"] == "mock"
     assert payload["provider"]["health"] in {"unknown", "ok"}
-    assert payload["recommendations"]["source"] == "predictions_archive_unique_latest"
+    assert payload["recommendations"]["source"] in {
+        "telegram_alert_archive+predictions_archive",
+        "predictions_archive",
+        "predictions_archive_unique_latest",
+    }
     assert "database" in payload
     assert "analytics" in payload
     assert "performance" in payload["analytics"]

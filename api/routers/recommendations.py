@@ -10,6 +10,7 @@ from api.services.recommendations import (
     build_recommendations_export_csv,
     build_today_recommendations,
 )
+from config.settings import get_settings
 from pipeline.runner import PredictionPipeline
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
@@ -26,9 +27,15 @@ def recommendations_today(
 @router.get("/archive")
 def recommendations_archive(
     include_pass: bool = Query(False, description="Include PASS signals in the archive response."),
+    include_alerts: bool = Query(True, description="Include Telegram alert archive items pushed today."),
     limit: int = Query(50, ge=1, le=200),
 ) -> dict:
-    return build_archived_recommendations(include_pass=include_pass, limit=limit)
+    settings = get_settings()
+    return build_archived_recommendations(
+        include_pass=include_pass,
+        limit=limit,
+        alert_archive_path=settings.telegram_alert_archive_path if include_alerts else None,
+    )
 
 
 @router.get("/export.csv")

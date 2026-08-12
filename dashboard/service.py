@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from api.services.recommendations import build_today_recommendations
+from api.services.recommendations import build_archived_recommendations, build_today_recommendations
 from config.settings import Settings, get_settings
 from database.repositories import DashboardRepository
 from database.session import SessionLocal
@@ -41,7 +41,7 @@ def build_dashboard_summary(
     settings = settings or get_settings()
     period_days = _normalize_period_days(period_days)
     database = _database_status(period_days)
-    recommendations = _archived_recommendation_status(database)
+    recommendations = _archived_recommendation_status(database, settings)
     model_optimizer = _cached_model_optimizer_status(settings)
     reports = _report_status(settings, period_days)
     return {
@@ -265,7 +265,27 @@ def _recommendation_status(pipeline: PredictionPipeline) -> dict[str, Any]:
         return {"health": "down", "error": str(exc), "count": 0, "items": []}
 
 
-def _archived_recommendation_status(database: dict[str, Any]) -> dict[str, Any]:
+def _archived_recommendation_status(database: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
+    if settings is not None:
+        try:
+            payload = build_archived_recommendations(
+                include_pass=False,
+                limit=80,
+                alert_archive_path=settings.telegram_alert_archive_path,
+            )
+            items = _unique_dashboard_recommendations(
+                [_localize_prediction_item(item) for item in list(payload.get("items") or [])]
+            )
+            return {
+                "health": "ok" if database.get("health") == "ok" else "unknown",
+                "error": payload.get("error"),
+                "count": len(items),
+                "items": items,
+                "source": payload.get("source") or "telegram_alert_archive+predictions_archive",
+            }
+        except Exception as exc:  # noqa: BLE001 - dashboard can still fall back to DB summary
+            logger.warning("dashboard archived recommendations unavailable: %s", exc)
+
     items = _unique_dashboard_recommendations(
         [_localize_prediction_item(item) for item in list(database.get("latest_predictions") or [])]
     )
