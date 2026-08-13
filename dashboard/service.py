@@ -79,6 +79,7 @@ def run_daily_evaluation(
             "date": report.report_date.isoformat(),
             "settled_count": report.settled_count,
             "learning_records_created": report.learning_records_created,
+            "sample_breakdown": report.sample_breakdown,
             "overview": report.overview,
             "wins": report.wins,
             "losses": report.losses,
@@ -378,16 +379,19 @@ def _performance_values_from_report(reports: dict[str, Any] | None) -> dict[str,
     signal_hit_rate = _parse_report_percent(_report_line_value(content, "\u4fe1\u53f7\u547d\u4e2d\u7387"))
     roi = _parse_report_percent(_report_line_value(content, "ROI"))
     calibration_error = _parse_report_float(_report_line_value(content, "\u4fe1\u5fc3\u6821\u51c6\u8bef\u5dee"))
+    sample_breakdown = _parse_report_sample_breakdown(_report_line_value(content, "\u6837\u672c\u7ed3\u6784"))
     hit_rate = signal_hit_rate if signal_hit_rate is not None else hunter_hit_rate
 
     if settled_count is None and hit_rate is None and roi is None and calibration_error is None:
         return {}
 
-    wins = round(settled_count * hit_rate) if settled_count is not None and hit_rate is not None else 0
-    losses = max(0, settled_count - wins) if settled_count is not None else 0
+    actionable_count = sample_breakdown.get("actionable_count") or settled_count or 0
+    wins = round(actionable_count * hit_rate) if hit_rate is not None else 0
+    losses = max(0, actionable_count - wins)
     return {
         "settled_count": settled_count or 0,
-        "actionable_count": settled_count or 0,
+        "actionable_count": actionable_count,
+        "sample_breakdown": sample_breakdown,
         "wins": wins,
         "losses": losses,
         "hit_rate": hit_rate or 0.0,
@@ -467,6 +471,23 @@ def _parse_report_float(value: str | None) -> float | None:
     if not match:
         return None
     return _coerce_float(match.group(0).replace(",", ""))
+
+
+def _parse_report_sample_breakdown(value: str | None) -> dict[str, int]:
+    if not value:
+        return {}
+    labels = {
+        "total_count": "\u603b\u6837\u672c",
+        "actionable_count": "\u53ef\u6267\u884c",
+        "observation_count": "\u89c2\u5bdf/\u8df3\u8fc7",
+        "block_count": "\u98ce\u63a7\u62e6\u622a",
+    }
+    breakdown: dict[str, int] = {}
+    for key, label in labels.items():
+        match = re.search(rf"{re.escape(label)}\s+(\d+)", value)
+        if match:
+            breakdown[key] = int(match.group(1))
+    return breakdown
 
 
 def _coerce_int(value: Any) -> int | None:

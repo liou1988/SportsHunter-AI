@@ -23,6 +23,7 @@ class EvaluationReport:
     metrics: EvaluationMetrics
     settled_count: int = 0
     learning_records_created: int = 0
+    sample_breakdown: dict[str, int] = field(default_factory=dict)
     overview: list[str] = field(default_factory=list)
     wins: list[str] = field(default_factory=list)
     losses: list[str] = field(default_factory=list)
@@ -37,6 +38,7 @@ class EvaluationReport:
             "",
             f"- 日期：{self.report_date.isoformat()}",
             f"- 已结算预测：{self.settled_count}",
+            *_sample_breakdown_lines(self.sample_breakdown, self.settled_count),
             f"- 新增学习记录：{self.learning_records_created}",
             f"- Hunter 评分命中率：{self.metrics.hunter_hit_rate:.2%}",
             f"- 信号命中率：{self.metrics.signal_hit_rate:.2%}",
@@ -101,6 +103,17 @@ def _format_list_items(items: list[str]) -> list[str]:
     if not items:
         return ["- 暂无数据。"]
     return [f"- {item}" for item in items]
+
+
+def _sample_breakdown_lines(breakdown: dict[str, int], settled_count: int) -> list[str]:
+    total = int(breakdown.get("total_count", settled_count) or 0)
+    actionable = int(breakdown.get("actionable_count", total) or 0)
+    observation = int(breakdown.get("observation_count", max(0, total - actionable)) or 0)
+    blocked = int(breakdown.get("block_count", 0) or 0)
+    return [
+        f"- 样本结构：总样本 {total} 场，可执行 {actionable} 场，观察/跳过 {observation} 场，风控拦截 {blocked} 场",
+        "- 评估口径：命中率、ROI 和信心误差仅按可执行信号统计；PASS/BLOCK 保留为观察样本",
+    ]
 
 
 

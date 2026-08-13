@@ -207,10 +207,18 @@ function renderEvaluationReport(report) {
   }
 
   const metrics = report.metrics || {};
+  const breakdown = report.sample_breakdown || {};
+  const totalSamples = breakdown.total_count ?? report.settled_count;
+  const actionableSamples = breakdown.actionable_count ?? report.settled_count;
+  const observationSamples = breakdown.observation_count ?? 0;
+  const blockedSamples = breakdown.block_count ?? 0;
   root.innerHTML = `
     <div class="review-summary-grid">
       ${renderReviewMetric("\u590d\u76d8\u65e5\u671f", report.date || report.report_date || "-")}
-      ${renderReviewMetric("\u5df2\u7ed3\u7b97", `${formatNumber(report.settled_count)} \u573a`)}
+      ${renderReviewMetric("\u5df2\u7ed3\u7b97", `${formatNumber(totalSamples)} \u573a`)}
+      ${renderReviewMetric("\u53ef\u6267\u884c", `${formatNumber(actionableSamples)} \u573a`)}
+      ${renderReviewMetric("\u89c2\u5bdf/\u8df3\u8fc7", `${formatNumber(observationSamples)} \u573a`)}
+      ${renderReviewMetric("\u98ce\u63a7\u62e6\u622a", `${formatNumber(blockedSamples)} \u573a`)}
       ${renderReviewMetric("\u5b66\u4e60\u8bb0\u5f55", `${formatNumber(report.learning_records_created)} \u6761`)}
       ${renderReviewMetric("ROI", formatPercent(metrics.roi), metricClass(metrics.roi, 0, true))}
       ${renderReviewMetric("Hunter\u547d\u4e2d", formatPercent(metrics.hunter_hit_rate), metricClass(metrics.hunter_hit_rate, 0.6))}
@@ -302,6 +310,7 @@ function parseEvaluationMarkdown(markdown) {
     risk_notes: [],
     module_contributions: [],
     module_notes: [],
+    sample_breakdown: {},
     metrics: { by_league: {}, by_market: {} },
   };
   const sectionMap = {
@@ -325,6 +334,7 @@ function parseEvaluationMarkdown(markdown) {
     const item = text.slice(2).trim();
     if (item.startsWith("\u65e5\u671f\uff1a")) report.date = item.replace("\u65e5\u671f\uff1a", "").trim();
     else if (item.startsWith("\u5df2\u7ed3\u7b97\u9884\u6d4b\uff1a")) report.settled_count = parseLooseNumber(item);
+    else if (item.startsWith("\u6837\u672c\u7ed3\u6784\uff1a")) report.sample_breakdown = parseSampleBreakdown(item);
     else if (item.startsWith("\u65b0\u589e\u5b66\u4e60\u8bb0\u5f55\uff1a")) report.learning_records_created = parseLooseNumber(item);
     else if (item.startsWith("Hunter \u8bc4\u5206\u547d\u4e2d\u7387\uff1a")) report.metrics.hunter_hit_rate = parseLoosePercent(item);
     else if (item.startsWith("\u4fe1\u53f7\u547d\u4e2d\u7387\uff1a")) report.metrics.signal_hit_rate = parseLoosePercent(item);
@@ -342,6 +352,24 @@ function assignRate(target, item) {
   const [name, value] = String(item).split("\uff1a");
   if (!name || value === undefined) return;
   target[translateLeagueName(name.trim())] = parseLoosePercent(value);
+}
+
+function parseSampleBreakdown(item) {
+  return {
+    total_count: parseLabeledCount(item, "\u603b\u6837\u672c"),
+    actionable_count: parseLabeledCount(item, "\u53ef\u6267\u884c"),
+    observation_count: parseLabeledCount(item, "\u89c2\u5bdf/\u8df3\u8fc7"),
+    block_count: parseLabeledCount(item, "\u98ce\u63a7\u62e6\u622a"),
+  };
+}
+
+function parseLabeledCount(item, label) {
+  const match = String(item || "").match(new RegExp(`${escapeRegExp(label)}\\s+(\\d+)`));
+  return match ? Number(match[1]) : undefined;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function parseLooseNumber(value) {

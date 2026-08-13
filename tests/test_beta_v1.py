@@ -1330,6 +1330,66 @@ def test_evaluation_metrics_show_no_risk_sample_as_empty() -> None:
     assert "暂无高风险/拦截样本" in report.to_markdown()
 
 
+def test_evaluation_report_separates_actionable_and_observation_samples(tmp_path) -> None:
+    rows = [
+        {
+            "signal": "BUY",
+            "actionable": True,
+            "won": True,
+            "stake": 1,
+            "profit": 0.8,
+            "confidence": 0.7,
+            "risk_level": "LOW",
+            "market_results": {},
+            "league": "Debug League",
+        },
+        {
+            "signal": "PASS",
+            "actionable": False,
+            "won": False,
+            "stake": 0,
+            "profit": 0,
+            "confidence": 0.4,
+            "risk_level": "LOW",
+            "market_results": {},
+            "league": "Debug League",
+        },
+        {
+            "signal": "BLOCK",
+            "actionable": False,
+            "won": False,
+            "stake": 0,
+            "profit": 0,
+            "confidence": 0.3,
+            "risk_level": "BLOCK",
+            "risk_blocked_bad_result": True,
+            "market_results": {},
+            "league": "Debug League",
+        },
+    ]
+
+    class NoopDataset:
+        def create_learning_records(self, rows: list[dict]) -> int:
+            return 0
+
+    report = EvaluationRunner(dataset=NoopDataset(), reports_dir=tmp_path).run("daily", rows=rows)
+
+    assert report.sample_breakdown == {
+        "total_count": 3,
+        "actionable_count": 1,
+        "observation_count": 2,
+        "strong_buy_count": 0,
+        "buy_count": 1,
+        "watch_count": 0,
+        "pass_count": 1,
+        "block_count": 1,
+    }
+    assert report.metrics.signal_hit_rate == 1.0
+    markdown = report.to_markdown()
+    assert "样本结构：总样本 3 场，可执行 1 场，观察/跳过 2 场，风控拦截 1 场" in markdown
+    assert "评估口径：命中率、ROI 和信心误差仅按可执行信号统计" in markdown
+
+
 def test_settlement_and_evaluation_loop_records_learning(mock_pipeline, tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
@@ -1934,6 +1994,48 @@ def test_dashboard_summary_returns_operational_payload(mock_settings) -> None:
     assert payload["analytics"]["period_days"] == 7
     assert payload["analytics"]["performance"]["period_days"] == 7
     assert payload["reports"]["period_days"] == 7
+
+
+def test_dashboard_evaluation_run_returns_sample_breakdown(monkeypatch) -> None:
+    sample_breakdown = {
+        "total_count": 3,
+        "actionable_count": 1,
+        "observation_count": 2,
+        "block_count": 1,
+    }
+
+    class FakeEvaluationRunner:
+        def __init__(self, reports_dir=None) -> None:
+            self.reports_dir = reports_dir
+
+        def run_for_days(self, days: int) -> EvaluationReport:
+            return EvaluationReport(
+                period=f"last_{days}_days",
+                report_date=datetime(2026, 8, 13, tzinfo=timezone.utc).date(),
+                metrics=calculate_metrics([
+                    {
+                        "signal": "BUY",
+                        "actionable": True,
+                        "won": True,
+                        "stake": 1,
+                        "profit": 0.8,
+                        "confidence": 0.7,
+                        "risk_level": "LOW",
+                        "market_results": {},
+                        "league": "Debug League",
+                    }
+                ]),
+                settled_count=3,
+                learning_records_created=0,
+                sample_breakdown=sample_breakdown,
+            )
+
+    monkeypatch.setattr(dashboard_service, "EvaluationRunner", FakeEvaluationRunner)
+
+    payload = dashboard_service.run_daily_evaluation(period_days=7)
+
+    assert payload["report"]["sample_breakdown"] == sample_breakdown
+    assert "样本结构：总样本 3 场，可执行 1 场" in payload["report"]["markdown"]
 
 
 def test_dashboard_summary_uses_cached_performance_without_live_dataset(monkeypatch, mock_settings) -> None:
@@ -2749,6 +2851,16 @@ def test_dashboard_frontend_exposes_period_stats_controls() -> None:
     assert "function renderPeriodControls" in script
     assert "period_days=${encodeURIComponent(state.periodDays)}" in script
     assert "handlePeriodControlClick" in script
+
+
+def test_dashboard_frontend_parses_evaluation_sample_breakdown() -> None:
+    script = Path("dashboard/static/app.js").read_text(encoding="utf-8")
+
+    assert "sample_breakdown" in script
+    assert "function parseSampleBreakdown" in script
+    assert "\\u6837\\u672c\\u7ed3\\u6784\\uff1a" in script
+    assert "\\u53ef\\u6267\\u884c" in script
+    assert "\\u98ce\\u63a7\\u62e6\\u622a" in script
 
 
 def test_dashboard_frontend_shows_kickoff_distance() -> None:

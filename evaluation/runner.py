@@ -27,6 +27,7 @@ class EvaluationRunner:
             metrics=calculate_metrics(rows),
             settled_count=len(rows),
             learning_records_created=learning_records_created,
+            sample_breakdown=_sample_breakdown(rows),
             overview=self.analyzer.overview_notes(rows),
             wins=self.analyzer.win_notes(rows),
             losses=self.analyzer.loss_notes(rows),
@@ -50,3 +51,19 @@ class EvaluationRunner:
 
     def monthly(self) -> EvaluationReport:
         return self.run("monthly")
+
+
+def _sample_breakdown(rows: list[dict]) -> dict[str, int]:
+    signals = [str(row.get("signal") or "UNKNOWN").upper() for row in rows]
+    actionable_count = sum(1 for row in rows if row.get("actionable", True))
+    block_count = sum(1 for signal in signals if signal == "BLOCK")
+    return {
+        "total_count": len(rows),
+        "actionable_count": actionable_count,
+        "observation_count": max(0, len(rows) - actionable_count),
+        "strong_buy_count": sum(1 for signal in signals if signal == "STRONG_BUY"),
+        "buy_count": sum(1 for signal in signals if signal == "BUY"),
+        "watch_count": sum(1 for signal in signals if signal == "WATCH"),
+        "pass_count": sum(1 for signal in signals if signal == "PASS"),
+        "block_count": block_count,
+    }
