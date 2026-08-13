@@ -12,6 +12,7 @@ from config.settings import Settings, get_settings
 from datahub.hub import build_datahub
 from evaluation.runner import EvaluationRunner
 from pipeline.runner import PredictionPipeline
+from scheduler.runner import create_scheduler
 from telegram_bot.alerts import AlertPushResult, RecommendationAlertPusher
 from telegram_bot.fixtures import format_fixtures_message
 from telegram_bot.notifier import TelegramNotifier, TelegramSendResult
@@ -168,8 +169,19 @@ def main() -> None:
         print(json.dumps(result.to_dict(include_config=True), ensure_ascii=False))
         return
 
+    scheduler = None
+    if settings.enable_scheduler and settings.automation_enabled:
+        scheduler = create_scheduler()
+        scheduler.start()
+        logger.info("telegram scheduler started")
+
     logger.info("telegram command bot starting")
-    build_application(settings).run_polling()
+    try:
+        build_application(settings).run_polling()
+    finally:
+        if scheduler and scheduler.running:
+            scheduler.shutdown(wait=False)
+            logger.info("telegram scheduler stopped")
 
 
 if __name__ == "__main__":

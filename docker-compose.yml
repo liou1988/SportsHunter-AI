@@ -7,6 +7,7 @@ services:
     environment:
       DATABASE_URL: sqlite:////app/data/sports_hunter.db
       LOG_FILE: /app/logs/sports_hunter.log
+      ENABLE_SCHEDULER: ${API_ENABLE_SCHEDULER:-false}
       DATA_PROVIDER: ${DATA_PROVIDER:-free}
       FOOTBALL_DATA_SOURCE: ${FOOTBALL_DATA_SOURCE:-free}
       FOOTBALL_DATA_SEASON: ${FOOTBALL_DATA_SEASON:-2026}
@@ -90,6 +91,7 @@ services:
     environment:
       DATABASE_URL: sqlite:////app/data/sports_hunter.db
       LOG_FILE: /app/logs/sports_hunter.log
+      ENABLE_SCHEDULER: ${TELEGRAM_ENABLE_SCHEDULER:-true}
       DATA_PROVIDER: ${DATA_PROVIDER:-free}
       FOOTBALL_DATA_SOURCE: ${FOOTBALL_DATA_SOURCE:-free}
       FOOTBALL_DATA_SEASON: ${FOOTBALL_DATA_SEASON:-2026}

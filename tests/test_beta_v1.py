@@ -68,6 +68,7 @@ from dashboard.router import get_datahub as dashboard_get_datahub
 from dashboard import service as dashboard_service
 from scheduler import jobs
 from scheduler.runner import create_scheduler
+from telegram_bot import bot as telegram_bot_module
 from telegram_bot import localization as localization_module
 from telegram_bot.alerts import AlertArchive, RecommendationAlertPusher, _is_unstarted_alert_fixture, format_recommendation_alert_message
 from telegram_bot.fixtures import format_fixtures_message
@@ -278,6 +279,8 @@ def test_settings_default_free_leagues_include_requested_regions() -> None:
 
 def test_docker_compose_allows_telegram_env_override() -> None:
     text = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert "ENABLE_SCHEDULER: ${API_ENABLE_SCHEDULER:-false}" in text
+    assert "ENABLE_SCHEDULER: ${TELEGRAM_ENABLE_SCHEDULER:-true}" in text
     assert "TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}" in text
     assert "BOT_TOKEN: ${BOT_TOKEN:-}" in text
     assert "CHAT_ID: ${CHAT_ID:-}" in text
@@ -2194,6 +2197,48 @@ def test_telegram_command_help_lists_interactive_commands() -> None:
     assert "/recommendations" in text
     assert "/alerts" in text
     assert "/report" in text
+
+
+def test_telegram_bot_main_owns_scheduler(monkeypatch) -> None:
+    events: list[str] = []
+    settings = Settings(
+        data_provider="mock",
+        telegram_bot_token="123456:debug-token",
+        enable_scheduler=True,
+        automation_enabled=True,
+        _env_file=None,
+    )
+
+    class FakeNotifier:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        def config_status(self) -> SimpleNamespace:
+            return SimpleNamespace(bot_token_configured=True, bot_token_format_valid=True)
+
+    class FakeScheduler:
+        running = False
+
+        def start(self) -> None:
+            events.append("scheduler_started")
+            self.running = True
+
+        def shutdown(self, wait: bool = False) -> None:
+            events.append(f"scheduler_stopped:{wait}")
+            self.running = False
+
+    class FakeApplication:
+        def run_polling(self) -> None:
+            events.append("polling")
+
+    monkeypatch.setattr(telegram_bot_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(telegram_bot_module, "TelegramNotifier", FakeNotifier)
+    monkeypatch.setattr(telegram_bot_module, "create_scheduler", lambda: FakeScheduler())
+    monkeypatch.setattr(telegram_bot_module, "build_application", lambda settings: FakeApplication())
+
+    telegram_bot_module.main()
+
+    assert events == ["scheduler_started", "polling", "scheduler_stopped:False"]
 
 
 def test_telegram_command_status_message_is_chinese() -> None:
